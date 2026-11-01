@@ -1,14 +1,14 @@
 from io import BytesIO
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
-import pytest
 
+from app.detections import run_detections
 from app.ingest import EXPECTED_COLUMNS, WorkbookValidationError, read_events
 from app.main import app
-from app.normalize import normalize_event
-
+from app.normalize import normalize_event, normalize_events
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REAL_WORKBOOK = PROJECT_ROOT / "SOC_L2_Logs_Ampliados_Multiples_Incidentes.xlsx"
@@ -106,6 +106,11 @@ def test_upload_endpoint_loads_real_workbook_and_paginates_events() -> None:
     assert len(payload["items"]) == 2
     assert payload["items"][0]["Log_ID"] == "EVT-00001"
 
+    analysis_response = client.post("/api/analyze")
+    assert analysis_response.status_code == 200
+    assert analysis_response.json()["event_count"] == 715
+    assert analysis_response.json()["finding_count"] > 0
+
 
 def test_upload_endpoint_rejects_non_xlsx_file() -> None:
     response = client.post(
@@ -115,3 +120,94 @@ def test_upload_endpoint_rejects_non_xlsx_file() -> None:
 
     assert response.status_code == 400
     assert ".xlsx" in response.json()["detail"]
+
+
+def test_rules_detect_expected_incident_evidence() -> None:
+    with REAL_WORKBOOK.open("rb") as source:
+        events = normalize_events(read_events(source))
+
+    findings = run_detections(events)
+    evidence_by_rule: dict[str, set[str]] = {}
+    for finding in findings:
+        evidence_by_rule.setdefault(finding["rule_id"], set()).update(finding["event_ids"])
+
+    expected_evidence = {
+        "R01": {"EVT-00110", "EVT-00174"},
+        "R02": {"EVT-00123", "EVT-00188"},
+        "R03": {"EVT-00123", "EVT-00188"},
+        "R04": {"EVT-00126", "EVT-00193"},
+        "R05": {"EVT-00198", "EVT-00280"},
+        "R06": {"EVT-00207", "EVT-00214"},
+        "R07": {"EVT-00225"},
+        "R08": {"EVT-00284", "EVT-00309"},
+        "R09": {"EVT-00232", "EVT-00428"},
+        "R10": {"EVT-00430", "EVT-00461"},
+        "R11": {"EVT-00235"},
+        "R12": {"EVT-00523", "EVT-00524", "EVT-00528", "EVT-00564"},
+        "R13": {"EVT-00314"},
+        "R14": {"EVT-00571", "EVT-00596", "EVT-00599"},
+    }
+
+    assert set(evidence_by_rule) == set(expected_evidence)
+    for rule_id, log_ids in expected_evidence.items():
+        assert log_ids <= evidence_by_rule[rule_id], rule_id
+
+    r10 = next(finding for finding in findings if finding["rule_id"] == "R10")
+    events_by_id = {event["Log_ID"]: event for event in events}
+    assert len(r10["event_ids"]) == 22
+    assert sum(events_by_id[log_id]["bytes_out"] for log_id in r10["event_ids"]) == 253_305_558
+
+    r14 = next(finding for finding in findings if finding["rule_id"] == "R14")
+    assert sum(events_by_id[log_id]["Event_ID"] == "HTTP_ACCESS" for log_id in r14["event_ids"]) == 21
+
+
+def test_detection_evidence_only_references_existing_logs() -> None:
+    with REAL_WORKBOOK.open("rb") as source:
+        events = normalize_events(read_events(source))
+
+    valid_log_ids = {event["Log_ID"] for event in events}
+    findings = run_detections(events)
+
+    assert all(set(finding["event_ids"]) <= valid_log_ids for finding in findings)
+
+
+def test_internal_baseline_does_not_trigger_brute_force_rule() -> None:
+    with REAL_WORKBOOK.open("rb") as source:
+        events = normalize_events(read_events(source))
+
+    r01_findings = [finding for finding in run_detections(events) if finding["rule_id"] == "R01"]
+
+    assert len(r01_findings) == 2
+    assert all("10.10.1.22" not in finding["entities"]["source_ips"] for finding in r01_findings)
+
+
+def test_brute_force_threshold_is_lower_for_external_ips() -> None:
+    events = []
+    for index in range(4):
+        events.append(
+            {
+                "Log_ID": f"EXT-{index}",
+                "Timestamp": f"2026-10-23 08:{index:02d}:00",
+                "Event_ID": "4625",
+                "User": f"user{index}",
+                "Source_IP": "203.0.113.10",
+                "Hostname": "DC-01",
+                "result_class": "failure",
+            }
+        )
+        events.append(
+            {
+                "Log_ID": f"INT-{index}",
+                "Timestamp": f"2026-10-23 08:{index:02d}:30",
+                "Event_ID": "4625",
+                "User": f"internal{index}",
+                "Source_IP": "10.10.1.22",
+                "Hostname": "DC-01",
+                "result_class": "failure",
+            }
+        )
+
+    r01_findings = [finding for finding in run_detections(events) if finding["rule_id"] == "R01"]
+
+    assert len(r01_findings) == 1
+    assert r01_findings[0]["entities"]["source_ips"] == ["203.0.113.10"]

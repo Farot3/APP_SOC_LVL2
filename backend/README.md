@@ -1,6 +1,6 @@
 # Backend — SOC L2 Incident Analyzer
 
-Primera fase: ingesta, validación y normalización del Excel SIEM.
+Fases 1–2: ingesta, normalización y detección determinista inicial sobre el Excel SIEM.
 
 ## Preparar entorno
 
@@ -34,5 +34,6 @@ Rutas disponibles en esta fase:
 - `GET /api/health`
 - `POST /api/upload` — formulario multipart, campo `file`, archivo `.xlsx`
 - `GET /api/events?page=1&page_size=50`
+- `POST /api/analyze` — ejecuta las reglas deterministas R01–R14 sobre la carga activa
 
-La carga queda en memoria y se reemplaza al subir otro archivo. Todavía no se implementaron reglas de detección ni correlación.
+La carga y los hallazgos quedan en memoria. La respuesta de análisis contiene hallazgos por regla; todavía no los agrupa en incidentes ni calcula su criticidad.

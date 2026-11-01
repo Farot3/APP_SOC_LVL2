@@ -2,7 +2,6 @@ import ipaddress
 import re
 from typing import Any
 
-
 _HTTP_STATUS = re.compile(r"^\s*(\d{3})\s*$")
 _URL = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 _BYTES_OUT = re.compile(r"\bbytes_out\s*[:=]\s*([\d,]+)", re.IGNORECASE)

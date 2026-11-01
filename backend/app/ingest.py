@@ -1,8 +1,7 @@
 from collections import Counter
-from typing import BinaryIO, Any
+from typing import Any, BinaryIO
 
 from openpyxl import load_workbook
-
 
 EXPECTED_SHEET = "SIEM Export"
 EXPECTED_COLUMNS = (
