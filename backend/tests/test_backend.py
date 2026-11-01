@@ -5,10 +5,12 @@ import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
+from app.correlate import correlate_findings
 from app.detections import run_detections
 from app.ingest import EXPECTED_COLUMNS, WorkbookValidationError, read_events
 from app.main import app
 from app.normalize import normalize_event, normalize_events
+from app.scoring import score_incidents
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REAL_WORKBOOK = PROJECT_ROOT / "SOC_L2_Logs_Ampliados_Multiples_Incidentes.xlsx"
@@ -106,10 +108,83 @@ def test_upload_endpoint_loads_real_workbook_and_paginates_events() -> None:
     assert len(payload["items"]) == 2
     assert payload["items"][0]["Log_ID"] == "EVT-00001"
 
+    filtered_response = client.get(
+        "/api/events",
+        params={
+            "host": "WEB-01",
+            "source_ip": "192.0.2.91",
+            "event_id": "HTTP_ACCESS",
+            "start_time": "2026-10-23T12:10:00",
+            "end_time": "2026-10-23T12:14:00",
+            "page_size": 30,
+        },
+    )
+    assert filtered_response.status_code == 200
+    assert filtered_response.json()["total"] == 21
+    assert all(item["Hostname"] == "WEB-01" for item in filtered_response.json()["items"])
+
+    dashboard_before_analysis = client.get("/api/dashboard")
+    assert dashboard_before_analysis.status_code == 200
+    assert dashboard_before_analysis.json()["analysis_ready"] is False
+    assert dashboard_before_analysis.json()["incident_count"] == 0
+    assert client.get("/api/incidents").status_code == 409
+
     analysis_response = client.post("/api/analyze")
     assert analysis_response.status_code == 200
-    assert analysis_response.json()["event_count"] == 715
-    assert analysis_response.json()["finding_count"] > 0
+    analysis = analysis_response.json()
+    assert analysis["event_count"] == 715
+    assert analysis["finding_count"] == 35
+    assert analysis["incident_count"] == 6
+    assert analysis["informational_finding_count"] == 15
+
+    incidents_response = client.get("/api/incidents")
+    assert incidents_response.status_code == 200
+    assert incidents_response.json()["total"] == 6
+
+    incident_detail = client.get("/api/incidents/I-06")
+    assert incident_detail.status_code == 200
+    assert incident_detail.json()["incident_id"] == "I-06"
+    assert "EVT-00599" in incident_detail.json()["event_ids"]
+    assert client.get("/api/incidents/I-99").status_code == 404
+
+    dashboard = client.get("/api/dashboard")
+    assert dashboard.status_code == 200
+    dashboard_data = dashboard.json()
+    assert dashboard_data["analysis_ready"] is True
+    assert dashboard_data["event_count"] == 715
+    assert len(dashboard_data["risk_matrix"]) == 6
+    risk_counts = {entry["level"]: entry["count"] for entry in dashboard_data["incidents_by_risk"]}
+    assert risk_counts == {"Crítico": 4, "Alto": 2, "Medio": 0, "Bajo": 0}
+
+
+def test_event_filters_reject_invalid_time_ranges() -> None:
+    response = client.get(
+        "/api/events",
+        params={
+            "start_time": "2026-10-23T13:00:00",
+            "end_time": "2026-10-23T12:00:00",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "posterior" in response.json()["detail"]
+
+
+def test_data_routes_report_missing_upload_or_analysis() -> None:
+    previous_state = (
+        app.state.events,
+        app.state.incidents,
+        app.state.analysis_ready,
+    )
+    app.state.events = []
+    app.state.incidents = []
+    app.state.analysis_ready = False
+    try:
+        assert client.get("/api/dashboard").status_code == 409
+        assert client.get("/api/incidents").status_code == 409
+        assert client.get("/api/incidents/I-01").status_code == 409
+    finally:
+        app.state.events, app.state.incidents, app.state.analysis_ready = previous_state
 
 
 def test_upload_endpoint_rejects_non_xlsx_file() -> None:
@@ -211,3 +286,42 @@ def test_brute_force_threshold_is_lower_for_external_ips() -> None:
 
     assert len(r01_findings) == 1
     assert r01_findings[0]["entities"]["source_ips"] == ["203.0.113.10"]
+
+
+def test_correlation_groups_six_incidents_and_keeps_subnet_links_as_hypotheses() -> None:
+    with REAL_WORKBOOK.open("rb") as source:
+        events = normalize_events(read_events(source))
+
+    findings = run_detections(events)
+    result = correlate_findings(findings, events)
+    incidents = score_incidents(result["incidents"])
+
+    expected_rules = {
+        "I-01": {"R01", "R02", "R03", "R04"},
+        "I-02": {"R01", "R02", "R03", "R04", "R05", "R06", "R07", "R09", "R11"},
+        "I-03": {"R05", "R08", "R13"},
+        "I-04": {"R09", "R10"},
+        "I-05": {"R12"},
+        "I-06": {"R14"},
+    }
+    assert len(incidents) == 6
+    assert len(result["informational_findings"]) == 15
+    assert {incident["incident_id"]: set(incident["rule_ids"]) for incident in incidents} == expected_rules
+    assert all("R02" not in incident["rule_ids"] or incident["incident_id"] in {"I-01", "I-02"} for incident in incidents)
+
+    scores = {incident["incident_id"]: incident["risk"] for incident in incidents}
+    assert (scores["I-01"]["impact"], scores["I-01"]["confidence"], scores["I-01"]["score"]) == (5, 4, 20)
+    assert (scores["I-02"]["impact"], scores["I-02"]["confidence"], scores["I-02"]["score"]) == (4, 5, 20)
+    assert (scores["I-03"]["impact"], scores["I-03"]["confidence"], scores["I-03"]["score"]) == (5, 4, 20)
+    assert (scores["I-04"]["impact"], scores["I-04"]["confidence"], scores["I-04"]["score"]) == (5, 4, 20)
+    assert (scores["I-05"]["impact"], scores["I-05"]["confidence"], scores["I-05"]["score"]) == (5, 3, 15)
+    assert (scores["I-06"]["impact"], scores["I-06"]["confidence"], scores["I-06"]["score"]) == (3, 4, 12)
+
+    hypothesis_pairs = {
+        (hypothesis["incident_ids"][0], hypothesis["incident_ids"][1], tuple(hypothesis["ip_pairs"][0]))
+        for hypothesis in result["hypotheses"]
+    }
+    assert hypothesis_pairs == {
+        ("I-01", "I-02", ("203.0.113.74", "203.0.113.88")),
+        ("I-02", "I-04", ("198.51.100.77", "198.51.100.88")),
+    }
