@@ -9,7 +9,7 @@ from .correlate import correlate_findings
 from .detections import run_detections
 from .ingest import EXPECTED_COLUMNS, WorkbookValidationError, read_events
 from .normalize import normalize_events, quality_warnings
-from .scoring import score_incidents
+from .scoring import RULE_TACTICS, score_incidents
 
 app = FastAPI(title="SOC L2 Incident Analyzer API", version="0.1.0")
 app.state.events = []
@@ -80,10 +80,51 @@ def analyze_events() -> dict[str, Any]:
 
 
 @app.get("/api/incidents")
-def get_incidents() -> dict[str, Any]:
+def get_incidents(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    risk_level: str | None = None,
+    rule_id: str | None = None,
+    user: str | None = None,
+    host: str | None = None,
+) -> dict[str, Any]:
     if not app.state.analysis_ready:
         raise HTTPException(status_code=409, detail="Ejecute /api/analyze antes de consultar incidentes.")
-    return {"total": len(app.state.incidents), "items": app.state.incidents}
+
+    filtered = app.state.incidents
+    if risk_level:
+        filtered = [
+            incident
+            for incident in filtered
+            if incident.get("risk", {}).get("level", "").casefold() == risk_level.casefold()
+        ]
+    if rule_id:
+        filtered = [
+            incident
+            for incident in filtered
+            if any(value.casefold() == rule_id.casefold() for value in incident.get("rule_ids", []))
+        ]
+    if user:
+        filtered = [
+            incident
+            for incident in filtered
+            if any(value.casefold() == user.casefold() for value in incident.get("entities", {}).get("users", []))
+        ]
+    if host:
+        filtered = [
+            incident
+            for incident in filtered
+            if any(value.casefold() == host.casefold() for value in incident.get("entities", {}).get("hosts", []))
+        ]
+
+    start = (page - 1) * page_size
+    return {
+        "total": len(filtered),
+        "page": page,
+        "page_size": page_size,
+        "filters": {"risk_level": risk_level, "rule_id": rule_id, "user": user, "host": host},
+        "items": filtered[start : start + page_size],
+    }
 
 
 @app.get("/api/incidents/{incident_id}")
@@ -120,6 +161,30 @@ def get_dashboard() -> dict[str, Any]:
         for incident in incidents
         for technique in incident.get("technique_ids", [])
     )
+    tactics = Counter(
+        tactic
+        for incident in incidents
+        for tactic in {
+            tactic
+            for rule_id in incident.get("rule_ids", [])
+            for tactic in RULE_TACTICS.get(rule_id, set())
+        }
+    )
+    tactic_labels = {
+        "credential_access": "Acceso a credenciales",
+        "initial_access": "Acceso inicial",
+        "privilege_escalation": "Escalamiento de privilegios",
+        "execution": "Ejecución",
+        "defense_evasion": "Evasión de defensas",
+        "discovery": "Descubrimiento",
+        "lateral_movement": "Movimiento lateral",
+        "collection": "Recolección",
+        "data_staging": "Preparación de datos",
+        "exfiltration": "Exfiltración",
+        "command_and_control": "Mando y control",
+        "persistence": "Persistencia",
+        "impact": "Impacto",
+    }
     hourly = Counter()
     for event in events:
         timestamp = _event_timestamp(event.get("Timestamp"))
@@ -142,6 +207,10 @@ def get_dashboard() -> dict[str, Any]:
         "incidents_by_risk": [
             {"level": level, "count": incidents_by_risk.get(level, 0)}
             for level in ("Crítico", "Alto", "Medio", "Bajo")
+        ],
+        "attack_tactics": [
+            {"id": tactic, "name": tactic_labels.get(tactic, tactic), "count": count}
+            for tactic, count in tactics.most_common()
         ],
         "attack_techniques": _counter_items(techniques),
         "risk_matrix": [

@@ -141,6 +141,13 @@ def test_upload_endpoint_loads_real_workbook_and_paginates_events() -> None:
     assert incidents_response.status_code == 200
     assert incidents_response.json()["total"] == 6
 
+    high_risk = client.get("/api/incidents", params={"risk_level": "Alto"})
+    assert high_risk.status_code == 200
+    assert high_risk.json()["total"] == 2
+    lateral_incidents = client.get("/api/incidents", params={"rule_id": "R07"})
+    assert lateral_incidents.status_code == 200
+    assert lateral_incidents.json()["total"] == 1
+
     incident_detail = client.get("/api/incidents/I-06")
     assert incident_detail.status_code == 200
     assert incident_detail.json()["incident_id"] == "I-06"
@@ -153,6 +160,7 @@ def test_upload_endpoint_loads_real_workbook_and_paginates_events() -> None:
     assert dashboard_data["analysis_ready"] is True
     assert dashboard_data["event_count"] == 715
     assert len(dashboard_data["risk_matrix"]) == 6
+    assert dashboard_data["attack_tactics"]
     risk_counts = {entry["level"]: entry["count"] for entry in dashboard_data["incidents_by_risk"]}
     assert risk_counts == {"Crítico": 4, "Alto": 2, "Medio": 0, "Bajo": 0}
 

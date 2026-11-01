@@ -1,6 +1,6 @@
 # Backend — SOC L2 Incident Analyzer
 
-Fases 1–3: ingesta, detección determinista, correlación y puntuación de riesgo sobre el Excel SIEM.
+Fases 1–4: ingesta, detección, correlación, puntuación de riesgo y API para la aplicación.
 
 ## Preparar entorno
 
@@ -33,8 +33,10 @@ Rutas disponibles en esta fase:
 
 - `GET /api/health`
 - `POST /api/upload` — formulario multipart, campo `file`, archivo `.xlsx`
-- `GET /api/events?page=1&page_size=50`
+- `GET /api/events?page=1&page_size=50` — admite filtros `host`, `user`, `source_ip`, `event_id`, `start_time` y `end_time`
 - `POST /api/analyze` — ejecuta reglas R01–R14, correlaciona y calcula riesgo
-- `GET /api/incidents` — lista los incidentes del último análisis
+- `GET /api/incidents` — lista filtrable por `risk_level`, `rule_id`, `user` y `host`
+- `GET /api/incidents/{incident_id}` — detalle, cronología y evidencia
+- `GET /api/dashboard` — métricas de eventos, reglas, incidentes, tácticas y matriz de riesgo
 
-La carga, los hallazgos y los incidentes quedan en memoria. Los vínculos débiles se devuelven como hipótesis y no se usan para unir incidentes.
+La carga, los hallazgos y los incidentes quedan en memoria. Los vínculos débiles se devuelven como hipótesis y no se usan para unir incidentes. Las rutas dependientes del análisis responden `409` si todavía no se ha cargado o analizado el Excel.
