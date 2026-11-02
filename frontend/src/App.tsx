@@ -35,7 +35,7 @@ function displayTime(value: string | null | undefined): string {
 }
 
 function RiskBadge({ level }: { level: string }) {
-  const className = level.toLocaleLowerCase("es").replaceAll("ó", "o");
+  const className = level.toLocaleLowerCase("es").replaceAll("í", "i").replaceAll("ó", "o");
   return <span className={`risk-badge risk-${className}`}>{level}</span>;
 }
 
@@ -279,25 +279,6 @@ function App() {
         {error && <div className="alert alert-error" role="alert">{error}</div>}
         {notice && !error && <div className="alert alert-success" role="status">{notice}</div>}
 
-        {upload && (
-          <nav className="section-nav" aria-label="Secciones de análisis">
-            {([
-              ["dashboard", "Resumen"],
-              ["incidents", "Incidentes", analysis?.incident_count],
-              ["events", "Eventos", upload.event_count],
-            ] as [Section, string, number?][]).map(([key, label, count]) => (
-              <button
-                className={`nav-tab ${section === key ? "active" : ""}`}
-                key={key}
-                onClick={() => setSection(key)}
-                type="button"
-              >
-                {label}{count !== undefined && <span className="tab-count">{count}</span>}
-              </button>
-            ))}
-          </nav>
-        )}
-
         {!upload && (
           <section className="empty-state welcome-state">
             <div className="empty-icon" aria-hidden="true">↥</div>
@@ -306,69 +287,92 @@ function App() {
           </section>
         )}
 
-        {upload && section === "dashboard" && (
-          <DashboardView dashboard={dashboard} analysis={analysis} onOpenIncidents={() => setSection("incidents")} />
-        )}
+        {upload && (
+          <section className="analysis-workspace" aria-label="Secciones de análisis">
+            <nav className="section-nav">
+              {([
+                ["dashboard", "Resumen"],
+                ["incidents", "Incidentes", analysis?.incident_count],
+                ["events", "Eventos", upload.event_count],
+              ] as [Section, string, number?][]).map(([key, label, count]) => (
+                <button
+                  className={`nav-tab ${section === key ? "active" : ""}`}
+                  key={key}
+                  onClick={() => setSection(key)}
+                  type="button"
+                >
+                  {label}{count !== undefined && <span className="tab-count">{count}</span>}
+                </button>
+              ))}
+            </nav>
 
-        {upload && section === "incidents" && (
-          <section className="content-grid incident-layout">
-            <Panel
-              title="Incidentes detectados"
-              action={
-                <select aria-label="Filtrar incidentes por criticidad" value={riskFilter} disabled={!analysis} onChange={(event) => void loadIncidentsByRisk(event.target.value)}>
-                  <option value="">Todas las criticidades</option>
-                  <option value="Crítico">Crítico</option>
-                  <option value="Alto">Alto</option>
-                  <option value="Medio">Medio</option>
-                  <option value="Bajo">Bajo</option>
-                </select>
-              }
-            >
-              {!analysis ? (
-                <p className="empty-copy">Carga el archivo y ejecuta el análisis para ver incidentes.</p>
-              ) : incidentList.length ? (
-                <div className="incident-list">
-                  {incidentList.map((incident) => (
-                    <button
-                      className={`incident-row ${selectedIncident?.incident_id === incident.incident_id ? "selected" : ""}`}
-                      key={incident.incident_id}
-                      onClick={() => void openIncident(incident.incident_id)}
-                      type="button"
-                    >
-                      <div className="incident-row-top">
-                        <span className="incident-id">{incident.incident_id}</span>
-                        <RiskBadge level={incident.risk.level} />
-                      </div>
-                      <strong>{incident.title}</strong>
-                      <span className="incident-row-meta">{incident.entities.hosts.join(" · ") || "Host no especificado"}</span>
-                      <span className="incident-row-meta">Puntaje {incident.risk.score} · {incident.rule_ids.join(", ")}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <p className="empty-copy">No hay incidentes para este filtro.</p>
+            <div className="tab-content">
+              {section === "dashboard" && (
+                <DashboardView dashboard={dashboard} analysis={analysis} onOpenIncidents={() => setSection("incidents")} />
               )}
-            </Panel>
 
-            <Panel title={selectedIncident ? `${selectedIncident.incident_id} · Detalle` : "Detalle del incidente"}>
-              {busy === "incident" && <p className="empty-copy">Cargando evidencia…</p>}
-              {!selectedIncident && busy !== "incident" && <p className="empty-copy">Selecciona un incidente para revisar su evidencia y cronología.</p>}
-              {selectedIncident && <IncidentDetail incident={selectedIncident} />}
-            </Panel>
+              {section === "incidents" && (
+                <section className="content-grid incident-layout">
+                  <Panel
+                    title="Incidentes detectados"
+                    action={
+                      <select aria-label="Filtrar incidentes por criticidad" value={riskFilter} disabled={!analysis} onChange={(event) => void loadIncidentsByRisk(event.target.value)}>
+                        <option value="">Todas las criticidades</option>
+                        <option value="Crítico">Crítico</option>
+                        <option value="Alto">Alto</option>
+                        <option value="Medio">Medio</option>
+                        <option value="Bajo">Bajo</option>
+                      </select>
+                    }
+                  >
+                    {!analysis ? (
+                      <p className="empty-copy">Carga el archivo y ejecuta el análisis para ver incidentes.</p>
+                    ) : incidentList.length ? (
+                      <div className="incident-list">
+                        {incidentList.map((incident) => (
+                          <button
+                            className={`incident-row ${selectedIncident?.incident_id === incident.incident_id ? "selected" : ""}`}
+                            key={incident.incident_id}
+                            onClick={() => void openIncident(incident.incident_id)}
+                            type="button"
+                          >
+                            <div className="incident-row-top">
+                              <span className="incident-id">{incident.incident_id}</span>
+                              <RiskBadge level={incident.risk.level} />
+                            </div>
+                            <strong>{incident.title}</strong>
+                            <span className="incident-row-meta">{incident.entities.hosts.join(" · ") || "Host no especificado"}</span>
+                            <span className="incident-row-meta">Puntaje {incident.risk.score} · {incident.rule_ids.join(", ")}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="empty-copy">No hay incidentes para este filtro.</p>
+                    )}
+                  </Panel>
+
+                  <Panel title={selectedIncident ? `${selectedIncident.incident_id} · Detalle` : "Detalle del incidente"}>
+                    {busy === "incident" && <p className="empty-copy">Cargando evidencia…</p>}
+                    {!selectedIncident && busy !== "incident" && <p className="empty-copy">Selecciona un incidente para revisar su evidencia y cronología.</p>}
+                    {selectedIncident && <IncidentDetail incident={selectedIncident} />}
+                  </Panel>
+                </section>
+              )}
+
+              {section === "events" && (
+                <EventsView
+                  eventPage={eventPage}
+                  page={page}
+                  loading={eventsLoading}
+                  filterDraft={filterDraft}
+                  setFilter={setFilter}
+                  onSubmit={applyEventFilters}
+                  onClear={clearEventFilters}
+                  onPage={(nextPage) => void loadEvents(nextPage)}
+                />
+              )}
+            </div>
           </section>
-        )}
-
-        {upload && section === "events" && (
-          <EventsView
-            eventPage={eventPage}
-            page={page}
-            loading={eventsLoading}
-            filterDraft={filterDraft}
-            setFilter={setFilter}
-            onSubmit={applyEventFilters}
-            onClear={clearEventFilters}
-            onPage={(nextPage) => void loadEvents(nextPage)}
-          />
         )}
 
         <footer className="page-footer">
@@ -423,7 +427,7 @@ function DashboardView({
             {dashboard.incidents_by_risk.map((item) => (
               <div className="risk-summary-row" key={item.level}>
                 <RiskBadge level={item.level} />
-                <div className="risk-summary-track"><span className={`risk-fill risk-fill-${item.level.toLocaleLowerCase("es").replaceAll("ó", "o")}`} style={{ width: `${Math.max(0, (item.count / Math.max(1, dashboard.incident_count)) * 100)}%` }} /></div>
+                <div className="risk-summary-track"><span className={`risk-fill risk-fill-${item.level.toLocaleLowerCase("es").replaceAll("í", "i").replaceAll("ó", "o")}`} style={{ width: `${Math.max(0, (item.count / Math.max(1, dashboard.incident_count)) * 100)}%` }} /></div>
                 <strong>{item.count}</strong>
               </div>
             ))}
