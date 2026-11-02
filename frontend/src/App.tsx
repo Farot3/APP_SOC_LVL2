@@ -1,10 +1,12 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
   apiRequest,
   type AnalysisResult,
   type Dashboard,
   type EventPage,
   type EventRecord,
+  type GeminiInterpretation,
+  type GeminiStatus,
   type Incident,
   type IncidentList,
   type UploadResult,
@@ -99,7 +101,18 @@ function App() {
   const [filterDraft, setFilterDraft] = useState<EventFilters>(EMPTY_FILTERS);
   const [activeFilters, setActiveFilters] = useState<EventFilters>(EMPTY_FILTERS);
   const [riskFilter, setRiskFilter] = useState("");
+  const [geminiStatus, setGeminiStatus] = useState<GeminiStatus | null>(null);
+  const [geminiLoading, setGeminiLoading] = useState(true);
+  const [geminiBusy, setGeminiBusy] = useState(false);
+  const [geminiResult, setGeminiResult] = useState<GeminiInterpretation | null>(null);
+  const [geminiError, setGeminiError] = useState("");
 
+  useEffect(() => {
+    apiRequest<GeminiStatus>("/api/ai/status")
+      .then(setGeminiStatus)
+      .catch(() => setGeminiStatus(null))
+      .finally(() => setGeminiLoading(false));
+  }, []);
 
   async function loadEvents(nextPage: number, filters: EventFilters = activeFilters) {
     setEventsLoading(true);
@@ -138,6 +151,8 @@ function App() {
       setDashboard(null);
       setIncidentList([]);
       setSelectedIncident(null);
+      setGeminiResult(null);
+      setGeminiError("");
       setRiskFilter("");
       setActiveFilters(EMPTY_FILTERS);
       setFilterDraft(EMPTY_FILTERS);
@@ -163,6 +178,9 @@ function App() {
       setAnalysis(result);
       setDashboard(dashboardResult);
       setIncidentList(incidentsResult.items);
+      setSelectedIncident(null);
+      setGeminiResult(null);
+      setGeminiError("");
       setSection("dashboard");
       setNotice(`Análisis terminado: ${result.incident_count} incidentes y ${result.finding_count} hallazgos de reglas.`);
       await loadEvents(1, activeFilters);
@@ -206,10 +224,30 @@ function App() {
     try {
       const result = await apiRequest<Incident>(`/api/incidents/${encodeURIComponent(incidentId)}`);
       setSelectedIncident(result);
+      setGeminiResult(null);
+      setGeminiError("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo cargar el incidente.");
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function interpretSelectedIncident() {
+    if (!selectedIncident || !geminiStatus?.enabled) return;
+    setGeminiBusy(true);
+    setGeminiError("");
+    setGeminiResult(null);
+    try {
+      const result = await apiRequest<GeminiInterpretation>(
+        `/api/incidents/${encodeURIComponent(selectedIncident.incident_id)}/interpret`,
+        { method: "POST" },
+      );
+      setGeminiResult(result);
+    } catch (caught) {
+      setGeminiError(caught instanceof Error ? caught.message : "No se pudo interpretar el incidente con Gemini.");
+    } finally {
+      setGeminiBusy(false);
     }
   }
 
@@ -245,10 +283,10 @@ function App() {
                 onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
               />
             </label>
-            <button className="button button-secondary" type="submit" disabled={!selectedFile || busy !== null}>
+            <button className="button button-secondary" type="submit" disabled={!selectedFile || busy !== null || geminiBusy}>
               {busy === "upload" ? "Cargando…" : "Cargar Excel"}
             </button>
-            <button className="button button-primary" type="button" onClick={analyzeWorkbook} disabled={!upload || busy !== null}>
+            <button className="button button-primary" type="button" onClick={analyzeWorkbook} disabled={!upload || busy !== null || geminiBusy}>
               {busy === "analysis" ? "Analizando…" : analysis ? "Volver a analizar" : "Analizar archivo"}
             </button>
           </form>
@@ -316,7 +354,7 @@ function App() {
                   <Panel
                     title="Incidentes detectados"
                     action={
-                      <select aria-label="Filtrar incidentes por criticidad" value={riskFilter} disabled={!analysis} onChange={(event) => void loadIncidentsByRisk(event.target.value)}>
+                      <select aria-label="Filtrar incidentes por criticidad" value={riskFilter} disabled={!analysis || geminiBusy} onChange={(event) => void loadIncidentsByRisk(event.target.value)}>
                         <option value="">Todas las criticidades</option>
                         <option value="Crítico">Crítico</option>
                         <option value="Alto">Alto</option>
@@ -332,6 +370,7 @@ function App() {
                         {incidentList.map((incident) => (
                           <button
                             className={`incident-row ${selectedIncident?.incident_id === incident.incident_id ? "selected" : ""}`}
+                            disabled={geminiBusy}
                             key={incident.incident_id}
                             onClick={() => void openIncident(incident.incident_id)}
                             type="button"
@@ -354,7 +393,18 @@ function App() {
                   <Panel title={selectedIncident ? `${selectedIncident.incident_id} · Detalle` : "Detalle del incidente"}>
                     {busy === "incident" && <p className="empty-copy">Cargando evidencia…</p>}
                     {!selectedIncident && busy !== "incident" && <p className="empty-copy">Selecciona un incidente para revisar su evidencia y cronología.</p>}
-                    {selectedIncident && <IncidentDetail incident={selectedIncident} />}
+                    {selectedIncident && (
+                      <IncidentDetail
+                        incident={selectedIncident}
+                        geminiStatus={geminiStatus}
+                        geminiLoading={geminiLoading}
+                        geminiBusy={geminiBusy}
+                        geminiResult={geminiResult}
+                        geminiError={geminiError}
+                        onInterpret={() => void interpretSelectedIncident()}
+                        onPrintReport={() => window.print()}
+                      />
+                    )}
                   </Panel>
                 </section>
               )}
@@ -376,10 +426,17 @@ function App() {
         )}
 
         <footer className="page-footer">
-          <span>Procesamiento local · Hallazgos respaldados por evidencia</span>
+          <span>Reglas y riesgo locales · Gemini opcional bajo demanda</span>
           <span>{upload?.filename ?? "Sin archivo cargado"}</span>
         </footer>
       </main>
+      {selectedIncident && (
+        <PrintableIncidentReport
+          incident={selectedIncident}
+          sourceFilename={upload?.filename ?? "Archivo no disponible"}
+          geminiResult={geminiResult?.incident_id === selectedIncident.incident_id ? geminiResult : null}
+        />
+      )}
     </div>
   );
 }
@@ -569,10 +626,32 @@ function EventRow({ event }: { event: EventRecord }) {
   );
 }
 
-function IncidentDetail({ incident }: { incident: Incident }) {
+function IncidentDetail({
+  incident,
+  geminiStatus,
+  geminiLoading,
+  geminiBusy,
+  geminiResult,
+  geminiError,
+  onInterpret,
+  onPrintReport,
+}: {
+  incident: Incident;
+  geminiStatus: GeminiStatus | null;
+  geminiLoading: boolean;
+  geminiBusy: boolean;
+  geminiResult: GeminiInterpretation | null;
+  geminiError: string;
+  onInterpret: () => void;
+  onPrintReport: () => void;
+}) {
+  const citedEvents = new Map(incident.events.map((event) => [event.Log_ID, event]));
   return (
     <div className="incident-detail">
       <div className="detail-title-row"><h3>{incident.title}</h3><RiskBadge level={incident.risk.level} /></div>
+      <div className="report-actions">
+        <button className="button button-secondary" onClick={onPrintReport} type="button">Imprimir / Guardar informe PDF</button>
+      </div>
       <div className="detail-score-grid">
         <span>Puntaje<strong>{incident.risk.score}</strong></span>
         <span>Impacto<strong>{incident.risk.impact}/5</strong></span>
@@ -587,6 +666,78 @@ function IncidentDetail({ incident }: { incident: Incident }) {
         {incident.entities.hosts.map((value) => <span key={`host-${value}`}>Host · {value}</span>)}
         {incident.entities.source_ips.map((value) => <span key={`ip-${value}`}>IP · {value}</span>)}
       </div></div>
+      <section className="gemini-panel" aria-labelledby="gemini-title">
+        <div className="gemini-heading">
+          <div>
+            <span className="detail-label">Interpretación opcional</span>
+            <h4 id="gemini-title">{geminiStatus?.model ?? "Gemini"}</h4>
+          </div>
+          <span className={`gemini-status ${geminiStatus?.enabled ? "is-enabled" : ""}`}>
+            {geminiLoading ? "Comprobando…" : geminiStatus?.enabled ? "Disponible" : "No configurado"}
+          </span>
+        </div>
+        <p className="gemini-privacy">
+          La primera interpretación envía a Google los hallazgos y eventos de este incidente. Si ya está guardada,
+          consultarla de nuevo no genera otra llamada. La clave permanece en el backend; las reglas y el riesgo deterministas no cambian.
+        </p>
+        <button
+          className="button button-primary"
+          type="button"
+          onClick={onInterpret}
+          disabled={!geminiStatus?.enabled || geminiLoading || geminiBusy}
+        >
+          {geminiBusy ? "Interpretando con Gemini…" : geminiResult ? "Consultar interpretación guardada" : "Interpretar con Gemini"}
+        </button>
+        {!geminiLoading && !geminiStatus?.enabled && (
+          <p className="muted-copy">Configura GEMINI_API_KEY en el entorno donde se inicia FastAPI para habilitar esta función.</p>
+        )}
+        {geminiError && <p className="gemini-error" role="alert">{geminiError}</p>}
+        {geminiResult && (
+          <div className="gemini-result" aria-live="polite">
+            <p className="gemini-cache-note">
+              {geminiResult.cache_hit
+                ? "Se recuperó la interpretación guardada; no se hizo otra llamada a Gemini."
+                : "Interpretación guardada en memoria; volver a consultarla no hará otra llamada a Gemini."}
+            </p>
+            <div className="gemini-result-heading">
+              <strong>Conclusión: {geminiResult.conclusion.replace("_", " ")}</strong>
+              <span>{geminiResult.model}</span>
+            </div>
+            <p><strong>Explicación:</strong> {geminiResult.explicacion}</p>
+            <p><strong>Limitación:</strong> {geminiResult.limitacion}</p>
+            <div>
+              <span className="detail-label">Evidencia citada</span>
+              {geminiResult.evidence_ids.length ? (
+                <ul className="gemini-evidence-list">
+                  {geminiResult.evidence_ids.map((id) => (
+                    <li key={id}>
+                      <code>{id}</code>
+                      <span>{citedEvents.get(id)?.Event_Description ?? "ID validado para este incidente"}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="muted-copy">Gemini no citó Log_ID para esta conclusión.</p>}
+            </div>
+            <div className="gemini-origin-analysis">
+              <span className="detail-label">Análisis de IP de origen</span>
+              {geminiResult.origenes.length ? (
+                <ul className="gemini-origin-list">
+                  {geminiResult.origenes.map((origin) => (
+                    <li key={origin.ip}>
+                      <code>{origin.ip}</code>
+                      <p>{origin.analisis}</p>
+                      <span className="muted-copy">
+                        Evidencia: {origin.evidence_ids.map((id) => `${id}${citedEvents.get(id) ? ` · ${citedEvents.get(id)?.Event_Description}` : ""}`).join("; ")}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="muted-copy">No se identificaron IP de origen pertinentes en estos eventos.</p>}
+              <p className="gemini-origin-caveat">Basado solo en los registros del incidente; no consulta reputación, geolocalización ni titularidad de las IP.</p>
+            </div>
+          </div>
+        )}
+      </section>
       <div className="detail-block">
         <span className="detail-label">Cronología y evidencia · {incident.events.length} eventos</span>
         <div className="timeline-list">
@@ -603,6 +754,120 @@ function IncidentDetail({ incident }: { incident: Incident }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function PrintableIncidentReport({
+  incident,
+  sourceFilename,
+  geminiResult,
+}: {
+  incident: Incident;
+  sourceFilename: string;
+  geminiResult: GeminiInterpretation | null;
+}) {
+  const generatedAt = new Date().toLocaleString("es-ES");
+  const citedEvents = new Map(incident.events.map((event) => [event.Log_ID, event]));
+
+  return (
+    <article className="print-report">
+      <header className="print-report-header">
+        <p className="print-eyebrow">SOC L2 · INFORME DE INCIDENTE</p>
+        <h1>{incident.title}</h1>
+        <div className="print-report-meta">
+          <span><strong>Incidente:</strong> {incident.incident_id}</span>
+          <span><strong>Generado:</strong> {generatedAt}</span>
+          <span><strong>Fuente:</strong> {sourceFilename}</span>
+        </div>
+      </header>
+
+      <section className="print-report-section">
+        <h2>Resumen y riesgo determinista</h2>
+        <div className="print-risk-grid">
+          <div><span>Criticidad</span><strong>{incident.risk.level}</strong></div>
+          <div><span>Puntaje</span><strong>{incident.risk.score}</strong></div>
+          <div><span>Impacto</span><strong>{incident.risk.impact}/5</strong></div>
+          <div><span>Confianza</span><strong>{incident.risk.confidence}/5</strong></div>
+        </div>
+        <p><strong>Impacto:</strong> {incident.risk.impact_rationale}</p>
+        <p><strong>Confianza:</strong> {incident.risk.confidence_rationale}</p>
+        <p><strong>Reglas:</strong> {incident.rule_ids.join(", ") || "Sin reglas asociadas"}</p>
+        <p><strong>Técnicas ATT&CK:</strong> {incident.technique_ids.join(", ") || "Sin técnicas asociadas"}</p>
+      </section>
+
+      <section className="print-report-section">
+        <h2>Hallazgos</h2>
+        {incident.findings.length ? incident.findings.map((finding) => (
+          <article className="print-finding" key={finding.finding_id}>
+            <h3>{finding.rule_id} · {finding.name}</h3>
+            <p>{finding.explanation}</p>
+            <p className="print-muted">
+              Periodo: {displayTime(finding.first_seen)} – {displayTime(finding.last_seen)}
+              {finding.event_ids.length ? ` · ${finding.event_ids.length} registros vinculados` : ""}
+            </p>
+          </article>
+        )) : <p>No hay hallazgos asociados a este incidente.</p>}
+      </section>
+
+      <section className="print-report-section">
+        <h2>Entidades relacionadas</h2>
+        <p><strong>Usuarios:</strong> {incident.entities.users.join(", ") || "—"}</p>
+        <p><strong>Hosts:</strong> {incident.entities.hosts.join(", ") || "—"}</p>
+        <p><strong>IP de origen:</strong> {incident.entities.source_ips.join(", ") || "—"}</p>
+        <p><strong>Destinos:</strong> {incident.entities.destinations.join(", ") || "—"}</p>
+      </section>
+
+      <section className="print-report-section">
+        <h2>Interpretación asistida por IA</h2>
+        {geminiResult ? (
+          <>
+            <p><strong>Modelo:</strong> {geminiResult.model}</p>
+            <p><strong>Conclusión:</strong> {geminiResult.conclusion.replace("_", " ")}</p>
+            <h3>Análisis de IP de origen</h3>
+            {geminiResult.origenes.length ? geminiResult.origenes.map((origin) => (
+              <article className="print-origin" key={origin.ip}>
+                <p><strong>{origin.ip}</strong> — {origin.analisis}</p>
+                <p className="print-muted">Evidencia: {origin.evidence_ids.map((id) => `${id}${citedEvents.get(id) ? ` · ${citedEvents.get(id)?.Event_Description}` : ""}`).join("; ")}</p>
+              </article>
+            )) : <p>No se identificaron IP de origen pertinentes en los eventos.</p>}
+            <p className="print-muted">El análisis usa solo los registros del incidente; no consulta reputación, geolocalización ni titularidad de las IP.</p>
+            <p><strong>Explicación:</strong> {geminiResult.explicacion}</p>
+            <p><strong>Limitación:</strong> {geminiResult.limitacion}</p>
+            <p><strong>Log_ID citados:</strong> {geminiResult.evidence_ids.length
+              ? geminiResult.evidence_ids.map((id) => `${id} — ${citedEvents.get(id)?.Event_Description ?? ""}`).join("; ")
+              : "No se citaron registros específicos."}</p>
+          </>
+        ) : (
+          <p>No se ejecutó Gemini para este incidente. El análisis determinista y su riesgo siguen disponibles.</p>
+        )}
+        <p className="print-disclaimer">
+          La conclusión de IA es una ayuda para priorizar la revisión y no confirma por sí sola actividad maliciosa.
+        </p>
+      </section>
+
+      <section className="print-report-section print-timeline">
+        <h2>Cronología completa · {incident.events.length} eventos</h2>
+        {incident.events.map((event) => (
+          <article className="print-event" key={event.Log_ID}>
+            <div className="print-event-meta">
+              <time>{displayTime(event.Timestamp)}</time>
+              <code>{event.Log_ID}</code>
+              <span>{event.Hostname || "Host no indicado"}</span>
+              <span>Event_ID {event.Event_ID}</span>
+            </div>
+            <p><strong>{event.Event_Description}</strong></p>
+            <p className="print-muted">
+              Usuario: {event.User || "—"} · Origen: {event.Source_IP || "—"} · Destino: {event.Destination || "—"} · Resultado: {event.Result}
+            </p>
+            {event.Process_CommandLine && <code className="print-command">{event.Process_CommandLine}</code>}
+          </article>
+        ))}
+      </section>
+
+      <footer className="print-report-footer">
+        Informe generado localmente a partir de los datos cargados. Verifica las conclusiones y la evidencia antes de tomar medidas.
+      </footer>
+    </article>
   );
 }
 

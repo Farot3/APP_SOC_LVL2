@@ -1,10 +1,13 @@
+import json
 from io import BytesIO
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
+from app import gemini
 from app.correlate import correlate_findings
 from app.detections import run_detections
 from app.ingest import EXPECTED_COLUMNS, WorkbookValidationError, read_events
@@ -333,3 +336,213 @@ def test_correlation_groups_six_incidents_and_keeps_subnet_links_as_hypotheses()
         ("I-01", "I-02", ("203.0.113.74", "203.0.113.88")),
         ("I-02", "I-04", ("198.51.100.77", "198.51.100.88")),
     }
+
+
+def _stub_incident() -> dict[str, object]:
+    return {
+        "incident_id": "I-TEST",
+        "title": "Incidente de prueba",
+        "rule_ids": ["R01"],
+        "risk": {"level": "Alto", "score": 12},
+        "findings": [],
+        "events": [{"Log_ID": "LOG-001", "Event_ID": "4625", "Source_IP": "203.0.113.10"}],
+    }
+
+
+def test_gemini_status_reports_disabled_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+
+    response = client.get("/api/ai/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"enabled": False, "model": "gemini-3.6-flash"}
+
+
+def test_interpret_endpoint_reports_missing_gemini_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "incidents", [_stub_incident()])
+    monkeypatch.setattr(app.state, "gemini_interpretations", {})
+
+    response = client.post("/api/incidents/I-TEST/interpret")
+
+    assert response.status_code == 503
+    assert "GEMINI_API_KEY" in response.json()["detail"]
+
+
+def test_interpret_endpoint_returns_structured_result_with_valid_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.6-flash")
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "incidents", [_stub_incident()])
+    monkeypatch.setattr(app.state, "gemini_interpretations", {})
+    model_result = {
+        "conclusion": "sospechoso",
+        "evidence_ids": ["LOG-001"],
+        "origenes": [{
+            "ip": "203.0.113.10",
+            "analisis": "La IP aparece como origen del evento fallido.",
+            "evidence_ids": ["LOG-001"],
+        }],
+        "comprobaciones_recomendadas": [{
+            "comprobacion": "Confirmar con el propietario si el intento era esperado.",
+            "evidence_ids": ["LOG-001"],
+        }],
+        "explicacion": "El intento fallido merece revisión.",
+        "limitacion": "Un evento no confirma un ataque.",
+    }
+    monkeypatch.setattr(
+        gemini.httpx,
+        "post",
+        lambda *args, **kwargs: httpx.Response(200, json={"output_text": json.dumps(model_result)}),
+    )
+
+    response = client.post("/api/incidents/I-TEST/interpret")
+
+    assert response.status_code == 200
+    assert response.json()["conclusion"] == "sospechoso"
+    assert response.json()["evidence_ids"] == ["LOG-001"]
+    assert response.json()["origenes"][0]["ip"] == "203.0.113.10"
+    assert response.json()["model"] == "gemini-3.6-flash"
+    assert response.json()["cache_hit"] is False
+
+
+def test_interpret_endpoint_rejects_unknown_evidence_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "incidents", [_stub_incident()])
+    monkeypatch.setattr(app.state, "gemini_interpretations", {})
+    model_result = {
+        "conclusion": "sospechoso",
+        "evidence_ids": ["NOT-A-REAL-LOG"],
+        "origenes": [{
+            "ip": "203.0.113.10",
+            "analisis": "La IP aparece como origen.",
+            "evidence_ids": ["NOT-A-REAL-LOG"],
+        }],
+        "comprobaciones_recomendadas": [],
+        "explicacion": "Texto de prueba.",
+        "limitacion": "Limitación de prueba.",
+    }
+    monkeypatch.setattr(
+        gemini.httpx,
+        "post",
+        lambda *args, **kwargs: httpx.Response(200, json={"output_text": json.dumps(model_result)}),
+    )
+
+    response = client.post("/api/incidents/I-TEST/interpret")
+
+    assert response.status_code == 502
+    assert "no pertenecen" in response.json()["detail"]
+
+
+def test_interpret_endpoint_rejects_unobserved_source_ips(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "incidents", [_stub_incident()])
+    monkeypatch.setattr(app.state, "gemini_interpretations", {})
+    model_result = {
+        "conclusion": "sospechoso",
+        "evidence_ids": ["LOG-001"],
+        "origenes": [{
+            "ip": "198.51.100.8",
+            "analisis": "La IP parece externa.",
+            "evidence_ids": ["LOG-001"],
+        }],
+        "comprobaciones_recomendadas": [],
+        "explicacion": "Los datos merecen revisión.",
+        "limitacion": "No se conoce el titular de la IP.",
+    }
+    monkeypatch.setattr(
+        gemini.httpx,
+        "post",
+        lambda *args, **kwargs: httpx.Response(200, json={"output_text": json.dumps(model_result)}),
+    )
+
+    response = client.post("/api/incidents/I-TEST/interpret")
+
+    assert response.status_code == 502
+    assert "IP de origen" in response.json()["detail"]
+
+
+def test_interpret_endpoint_rejects_evidence_from_a_different_source_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    incident = _stub_incident()
+    incident["events"].append({"Log_ID": "LOG-002", "Event_ID": "4625", "Source_IP": "198.51.100.8"})
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "incidents", [incident])
+    monkeypatch.setattr(app.state, "gemini_interpretations", {})
+    model_result = {
+        "conclusion": "sospechoso",
+        "evidence_ids": ["LOG-001"],
+        "origenes": [{
+            "ip": "198.51.100.8",
+            "analisis": "Análisis de prueba.",
+            "evidence_ids": ["LOG-001"],
+        }],
+        "comprobaciones_recomendadas": [],
+        "explicacion": "Los eventos requieren revisión.",
+        "limitacion": "Datos de prueba.",
+    }
+    monkeypatch.setattr(
+        gemini.httpx,
+        "post",
+        lambda *args, **kwargs: httpx.Response(200, json={"output_text": json.dumps(model_result)}),
+    )
+
+    response = client.post("/api/incidents/I-TEST/interpret")
+
+    assert response.status_code == 502
+    assert "no respalda la IP" in response.json()["detail"]
+
+
+def test_interpret_endpoint_reuses_cached_result_and_invalidates_on_model_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.6-flash")
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "incidents", [_stub_incident()])
+    monkeypatch.setattr(app.state, "gemini_interpretations", {})
+    model_result = {
+        "conclusion": "sospechoso",
+        "evidence_ids": ["LOG-001"],
+        "origenes": [{
+            "ip": "203.0.113.10",
+            "analisis": "La IP aparece como origen del evento fallido.",
+            "evidence_ids": ["LOG-001"],
+        }],
+        "comprobaciones_recomendadas": [{
+            "comprobacion": "Confirmar con el propietario si el intento era esperado.",
+            "evidence_ids": ["LOG-001"],
+        }],
+        "explicacion": "El intento fallido merece revisión.",
+        "limitacion": "Un evento no confirma un ataque.",
+    }
+    calls: list[str] = []
+
+    def fake_post(*args: object, **kwargs: object) -> httpx.Response:
+        calls.append("called")
+        return httpx.Response(200, json={"output_text": json.dumps(model_result)})
+
+    monkeypatch.setattr(gemini.httpx, "post", fake_post)
+
+    first = client.post("/api/incidents/I-TEST/interpret")
+    second = client.post("/api/incidents/I-TEST/interpret")
+
+    assert first.status_code == 200
+    assert first.json()["cache_hit"] is False
+    assert second.status_code == 200
+    assert second.json()["cache_hit"] is True
+    assert len(calls) == 1
+
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.8-flash")
+    third = client.post("/api/incidents/I-TEST/interpret")
+
+    assert third.status_code == 200
+    assert third.json()["model"] == "gemini-3.8-flash"
+    assert third.json()["cache_hit"] is False
+    assert len(calls) == 2

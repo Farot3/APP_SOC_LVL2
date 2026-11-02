@@ -1,3 +1,32 @@
+export interface GeminiStatus {
+  enabled: boolean;
+  model: string;
+}
+
+export interface GeminiOriginAnalysis {
+  ip: string;
+  analisis: string;
+  evidence_ids: string[];
+}
+
+export interface GeminiRecommendedCheck {
+  comprobacion: string;
+  evidence_ids: string[];
+}
+
+export interface GeminiInterpretation {
+  incident_id: string;
+  model: string;
+  conclusion: "sospechoso" | "no_suficiente";
+  evidence_ids: string[];
+  origenes: GeminiOriginAnalysis[];
+  comprobaciones_recomendadas: GeminiRecommendedCheck[];
+  explicacion: string;
+  limitacion: string;
+  baseline_risk_level: string | null;
+  cache_hit: boolean;
+}
+
 export interface UploadResult {
   filename: string;
   event_count: number;
@@ -32,6 +61,18 @@ export interface RiskScore {
   confidence_rationale: string;
 }
 
+export interface Finding {
+  finding_id: string;
+  rule_id: string;
+  name: string;
+  explanation: string;
+  technique_ids: string[];
+  event_ids: string[];
+  first_seen: string | null;
+  last_seen: string | null;
+  entities: Record<string, string[]>;
+}
+
 export interface Incident {
   incident_id: string;
   title: string;
@@ -44,6 +85,7 @@ export interface Incident {
     destinations: string[];
   };
   finding_ids: string[];
+  findings: Finding[];
   event_ids: string[];
   events: EventRecord[];
   risk: RiskScore;

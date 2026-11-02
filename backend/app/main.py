@@ -7,6 +7,12 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 
 from .correlate import correlate_findings
 from .detections import run_detections
+from .gemini import (
+    GeminiAPIError,
+    GeminiConfigurationError,
+    gemini_status,
+    interpret_incident,
+)
 from .ingest import EXPECTED_COLUMNS, WorkbookValidationError, read_events
 from .normalize import normalize_events, quality_warnings
 from .scoring import RULE_TACTICS, score_incidents
@@ -19,6 +25,7 @@ app.state.incidents = []
 app.state.informational_findings = []
 app.state.hypotheses = []
 app.state.analysis_ready = False
+app.state.gemini_interpretations = {}
 
 
 @app.get("/api/health")
@@ -45,6 +52,7 @@ def upload_workbook(file: Annotated[UploadFile, File()]) -> dict[str, Any]:
     app.state.informational_findings = []
     app.state.hypotheses = []
     app.state.analysis_ready = False
+    app.state.gemini_interpretations = {}
     return {
         "filename": filename,
         "event_count": len(events),
@@ -65,6 +73,7 @@ def analyze_events() -> dict[str, Any]:
     app.state.incidents = incidents
     app.state.informational_findings = correlation["informational_findings"]
     app.state.hypotheses = correlation["hypotheses"]
+    app.state.gemini_interpretations = {}
     app.state.analysis_ready = True
     return {
         "event_count": len(app.state.events),
@@ -125,6 +134,40 @@ def get_incidents(
         "filters": {"risk_level": risk_level, "rule_id": rule_id, "user": user, "host": host},
         "items": filtered[start : start + page_size],
     }
+
+
+@app.get("/api/ai/status")
+def get_ai_status() -> dict[str, Any]:
+    return gemini_status()
+
+
+@app.post("/api/incidents/{incident_id}/interpret")
+def interpret_incident_with_gemini(incident_id: str) -> dict[str, Any]:
+    if not app.state.analysis_ready:
+        raise HTTPException(status_code=409, detail="Ejecute /api/analyze antes de interpretar un incidente.")
+
+    incident = next(
+        (item for item in app.state.incidents if item["incident_id"].casefold() == incident_id.casefold()),
+        None,
+    )
+    if incident is None:
+        raise HTTPException(status_code=404, detail=f"No existe el incidente '{incident_id}'.")
+
+    model = gemini_status()["model"]
+    cached_result = app.state.gemini_interpretations.get(incident["incident_id"])
+    if cached_result and cached_result.get("model") == model:
+        return {**cached_result, "cache_hit": True}
+
+    try:
+        result = interpret_incident(incident)
+    except GeminiConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except GeminiAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    result["cache_hit"] = False
+    app.state.gemini_interpretations[incident["incident_id"]] = result
+    return result
 
 
 @app.get("/api/incidents/{incident_id}")
