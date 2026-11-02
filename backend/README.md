@@ -1,6 +1,6 @@
 # Backend — SOC L2 Incident Analyzer
 
-Fases 1–4: ingesta, detección, correlación, puntuación de riesgo y API para la aplicación.
+Fases 1–4: ingesta, detección, correlación, puntuación de riesgo y API para la aplicación. La interfaz de la Fase 5 está en `../frontend/`.
 
 ## Preparar entorno
 
@@ -21,6 +21,12 @@ Desde `backend/`:
 
 Las pruebas de integración usan `../SOC_L2_Logs_Ampliados_Multiples_Incidentes.xlsx`.
 
+Para revisar también el estilo del backend:
+
+```powershell
+.\.venv\Scripts\python.exe -m ruff check app tests
+```
+
 ## Iniciar API local
 
 Desde `backend/`:
@@ -40,3 +46,14 @@ Rutas disponibles en esta fase:
 - `GET /api/dashboard` — métricas de eventos, reglas, incidentes, tácticas y matriz de riesgo
 
 La carga, los hallazgos y los incidentes quedan en memoria. Los vínculos débiles se devuelven como hipótesis y no se usan para unir incidentes. Las rutas dependientes del análisis responden `409` si todavía no se ha cargado o analizado el Excel.
+
+## Ejecutar la interfaz (Fase 5)
+
+Con la API iniciada en el puerto 8000, abre otra terminal en `frontend/`:
+
+```powershell
+npm install
+npm run dev
+```
+
+Abre `http://127.0.0.1:5173`. Vite reenvía `/api` a la API local. También puedes compilar la interfaz con `npm run build`.
