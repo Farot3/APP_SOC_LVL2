@@ -25,8 +25,7 @@ para aumentar la cobertura real.
 
 ### 1. Carga y normalización — completada
 
-Leer el libro Excel esperado, validar columnas, normalizar campos y exponer
-observaciones de calidad sin descartar los valores originales relevantes.
+Importar Excel a un esquema canónico. El backend busca hojas y encabezados, sugiere aliases conocidos y permite corregir el mapeo manualmente antes de importar. Los campos esenciales son timestamp, host, Event_ID, usuario, Source_IP, descripción y resultado; campos auxiliares ausentes quedan vacíos y `Log_ID` puede generarse localmente. La acción opcional **Sugerir mapeo con Gemini** envía solo nombres de columnas, nunca filas, y requiere revisión humana. Después se normaliza y exponen observaciones de calidad sin descartar los datos originales relevantes.
 
 ### 2. Detección por reglas — completada
 
@@ -88,12 +87,15 @@ Con el libro de referencia (35 hallazgos, 6 incidentes), clasificar por hallazgo
 individualmente excedería la cuota diaria conocida. La estrategia prevista es una
 llamada por incidente para la fase 4 (6), una para correlación (1) y dos para
 informes (2): aproximadamente **9 llamadas por análisis completo**, solo cuando el
-usuario las solicite y sin contar reintentos. La caché reduce llamadas repetidas,
-pero actualmente no sobrevive a un reinicio del backend.
+usuario las solicite y sin contar reintentos. El mapeo de columnas puede consumir
+una llamada adicional, también explícita, pero solo envía encabezados. La caché
+reduce llamadas repetidas para las fases de análisis, pero vive en memoria y no
+sobrevive a un reinicio del backend.
 
-Antes de una prueba real, comprobar modelo y cuota. No enviar registros sensibles
-sin autorización: la llamada seleccionada envía los datos del incidente a Google.
-Las pruebas automatizadas no hacen llamadas de red.
+Antes de una prueba real, comprobar modelo y cuota. Las llamadas de análisis envían
+hallazgos y eventos relevantes a Google; el mapeo de columnas solo envía encabezados.
+No enviar datos sensibles sin autorización. Las pruebas automatizadas no hacen
+llamadas de red.
 
 ## Siguiente paso
 

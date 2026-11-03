@@ -54,6 +54,22 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .button-quiet { border-color: var(--line); background: #fff; color: #34434e; }
 .button-quiet:hover:not(:disabled) { background: #f4f7f8; }
 .quality-panel { margin-top: 14px; padding: 16px 20px; border: 1px solid #d9e4dc; border-radius: 12px; background: #fff; box-shadow: 0 4px 14px #1b34400a; }
+.mapping-panel { margin-top: 14px; padding: 18px 20px; border: 1px solid #d9e4dc; border-radius: 12px; background: #fff; box-shadow: 0 4px 14px #1b34400a; }
+.mapping-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mapping-panel-heading h2 { margin: 2px 0 0; font-size: 17px; }
+.mapping-panel > p { color: var(--muted); font-size: 12px; line-height: 1.55; }
+.mapping-source-controls { display: flex; flex-wrap: wrap; gap: 12px; margin: 14px 0; }
+.mapping-source-controls label, .mapping-field { display: grid; gap: 5px; color: #45555e; font-size: 11px; font-weight: 600; }
+.mapping-source-controls select, .mapping-source-controls input, .mapping-field select { min-height: 35px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); font-size: 11px; }
+.mapping-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.mapping-field { min-width: 0; padding: 9px; border: 1px solid #e7ecef; border-radius: 8px; background: #fbfcfc; }
+.mapping-field > span { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.mapping-field > span strong { color: #8b5b18; font-size: 9px; }
+.mapping-field select { width: 100%; }
+.mapping-warning { padding: 9px 11px; border-radius: 7px; background: #fff8e9; color: #77551a !important; }
+.mapping-actions { margin-top: 14px; display: flex; justify-content: space-between; align-items: center; gap: 14px; }
+.mapping-actions > div { display: grid; gap: 6px; }
+.mapping-privacy { max-width: 600px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .quality-heading { margin-bottom: 12px; }
 .quality-heading h2 { margin: 0; color: var(--ink); font-size: 15px; }
 .quality-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
@@ -257,6 +273,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
   .upload-form { justify-content: flex-start; }
   .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .content-grid { grid-template-columns: 1fr; }
+  .mapping-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mapping-actions { align-items: flex-start; flex-direction: column; }
   .incident-layout { grid-template-columns: 1fr; }
   .risk-matrix-row { grid-template-columns: 45px 1fr 1fr 35px 65px; gap: 5px; }
 }
@@ -297,6 +315,9 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 
 @media (max-width: 560px) {
   .topbar { height: 70px; padding: 0 15px; }
+  .mapping-panel-heading { align-items: flex-start; flex-direction: column; }
+  .mapping-grid { grid-template-columns: 1fr; }
+  .mapping-source-controls { display: grid; grid-template-columns: 1fr 1fr; }
   .brand-mark { width: 36px; height: 36px; }
   .brand-lockup h1 { font-size: 14px; }
   .connection-status { font-size: 0; }

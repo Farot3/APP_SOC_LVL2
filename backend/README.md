@@ -40,7 +40,10 @@ La configuración opcional de Gemini se explica en la sección **Interpretación
 Rutas disponibles en esta fase:
 
 - `GET /api/health`
-- `POST /api/upload` — formulario multipart, campo `file`, archivo `.xlsx`
+- `POST /api/upload/preview` — detecta hoja, fila de encabezados y mapeo inicial sin guardar el archivo como análisis
+- `POST /api/upload/mapped` — importa un `.xlsx` con hoja, fila y asignación de columnas confirmadas
+- `POST /api/upload` — ruta compatible para el formato canónico anterior
+- `POST /api/ai/map-columns` — Gemini sugiere una asignación basada solo en encabezados; no recibe filas de eventos
 - `GET /api/events?page=1&page_size=50` — admite filtros `host`, `user`, `source_ip`, `event_id`, `start_time` y `end_time`
 - `POST /api/analyze` — ejecuta reglas R01–R14, correlaciona y calcula riesgo
 - `GET /api/incidents` — lista filtrable por `risk_level`, `rule_id`, `user` y `host`
@@ -52,7 +55,7 @@ Rutas disponibles en esta fase:
 - `POST /api/ai/reports/technical` — genera bajo demanda el informe técnico global
 - `GET /api/dashboard` — métricas de eventos, reglas, incidentes, tácticas y matriz de riesgo
 
-La carga, los hallazgos y los incidentes quedan en memoria. Los vínculos débiles se devuelven como hipótesis y no se usan para unir incidentes. Las rutas dependientes del análisis responden `409` si todavía no se ha cargado o analizado el Excel.
+La carga, los hallazgos y los incidentes quedan en memoria. El importador busca hojas/encabezados y admite mapeo manual al esquema canónico; solo exige los campos necesarios para interpretar temporalidad, equipo, evento, cuenta, IP de origen, descripción y resultado. Los campos opcionales ausentes quedan vacíos y `Log_ID` se genera localmente si no existe. La sugerencia opcional `POST /api/ai/map-columns` envía únicamente los nombres de columnas a Google; requiere confirmación humana antes de importar y no se ejecuta automáticamente. Los vínculos débiles se devuelven como hipótesis y no se usan para unir incidentes. Las rutas dependientes del análisis responden `409` si todavía no se ha cargado o analizado el Excel.
 
 ## Ejecutar la interfaz
 

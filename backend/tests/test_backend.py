@@ -34,6 +34,19 @@ def _workbook_bytes(headers: tuple[str, ...], row: tuple[object, ...] | None = N
     return output
 
 
+def _alternate_workbook_bytes() -> BytesIO:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Windows Events"
+    worksheet.append(["Security event export"])
+    worksheet.append(("Time Created", "Computer Name", "Event Code", "Account Name", "Client IP", "Message", "Outcome", "Command Line"))
+    worksheet.append(("2026-10-23 10:00:00", "APP-SRV01", 4624, r"CORP\alice", "10.1.2.3", "An account was successfully logged on (LogonType=10; RDP)", "Success", "powershell.exe -NoProfile"))
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
 def test_reads_real_workbook_and_validates_dataset_shape() -> None:
     with REAL_WORKBOOK.open("rb") as source:
         events = read_events(source)
@@ -1115,3 +1128,100 @@ def test_ai_report_rejects_ambiguous_baseline_before_network_call(monkeypatch: p
     assert response.status_code == 409
     assert "finding_id duplicados" in response.json()["detail"]
     assert calls == []
+
+
+def test_upload_preview_detects_alternate_sheet_and_header_aliases() -> None:
+    response = client.post(
+        "/api/upload/preview",
+        files={"file": ("alternate.xlsx", _alternate_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    preview = response.json()
+    assert preview["sheet_name"] == "Windows Events"
+    assert preview["header_row"] == 2
+    assert preview["suggested_mapping"]["Timestamp"] == "Time Created"
+    assert preview["suggested_mapping"]["Source_IP"] == "Client IP"
+    assert preview["missing_required_columns"] == []
+
+
+def test_mapped_upload_normalizes_events_and_generates_missing_log_ids() -> None:
+    preview_response = client.post(
+        "/api/upload/preview",
+        files={"file": ("alternate.xlsx", _alternate_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert preview_response.status_code == 200
+    preview = preview_response.json()
+
+    response = client.post(
+        "/api/upload/mapped",
+        data={
+            "sheet_name": preview["sheet_name"],
+            "header_row": str(preview["header_row"]),
+            "column_mapping": json.dumps(preview["suggested_mapping"]),
+        },
+        files={"file": ("alternate.xlsx", _alternate_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["event_count"] == 1
+    assert app.state.events[0]["Log_ID"] == "ROW-000003"
+    assert app.state.events[0]["Event_ID"] == "4624"
+    assert app.state.events[0]["result_class"] == "success"
+
+
+def test_gemini_column_mapping_receives_headers_only_and_validates_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    mapping = {
+        "Log_ID": "",
+        "Timestamp": "Time Created",
+        "Hostname": "Computer Name",
+        "Event_ID": "Event Code",
+        "User": "Account Name",
+        "Source_IP": "Client IP",
+        "Destination": "",
+        "Log_Source": "",
+        "Event_Description": "Message",
+        "Process_CommandLine": "Command Line",
+        "Result": "Outcome",
+        "Severity": "",
+    }
+    requests: list[dict[str, Any]] = []
+
+    def fake_post(*args: object, **kwargs: Any) -> httpx.Response:
+        requests.append(kwargs["json"])
+        return httpx.Response(200, json={"output_text": json.dumps({"mapping": mapping})})
+
+    monkeypatch.setattr(gemini.httpx, "post", fake_post)
+    response = client.post(
+        "/api/ai/map-columns",
+        json={"columns": ["Time Created", "Computer Name", "Event Code", "Account Name", "Client IP", "Message", "Command Line", "Outcome"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mapping"]["Timestamp"] == "Time Created"
+    assert "CORP\\alice" not in requests[0]["input"]
+    assert "Message" in requests[0]["input"]
+
+
+def test_flexible_preview_keeps_the_reference_workbook_schema() -> None:
+    with REAL_WORKBOOK.open("rb") as source:
+        response = client.post(
+            "/api/upload/preview",
+            files={
+                "file": (
+                    REAL_WORKBOOK.name,
+                    source,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+
+    assert response.status_code == 200
+    preview = response.json()
+    assert preview["sheet_name"] == "SIEM Export"
+    assert preview["header_row"] == 1
+    assert preview["columns"] == list(EXPECTED_COLUMNS)
+    assert preview["missing_required_columns"] == []

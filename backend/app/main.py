@@ -1,9 +1,11 @@
+import json
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel, Field
 
 from .correlate import correlate_findings
 from .detections import run_detections
@@ -13,9 +15,17 @@ from .gemini import (
     gemini_status,
     generate_analysis_report,
     interpret_incident,
+    suggest_column_mapping,
     suggest_finding_correlation,
 )
-from .ingest import EXPECTED_COLUMNS, WorkbookValidationError, read_events
+from .ingest import (
+    EXPECTED_COLUMNS,
+    REQUIRED_MAPPING_COLUMNS,
+    WorkbookValidationError,
+    preview_workbook,
+    read_events,
+    read_events_mapped,
+)
 from .normalize import normalize_events, quality_warnings
 from .scoring import RULE_TACTICS, score_incidents
 
@@ -32,9 +42,84 @@ app.state.gemini_correlations = {}
 app.state.gemini_reports = {}
 
 
+class ColumnMappingRequest(BaseModel):
+    columns: list[str] = Field(min_length=1, max_length=100)
+
+
+def _activate_workbook(filename: str, events: list[dict[str, Any]]) -> None:
+    app.state.events = normalize_events(events)
+    app.state.source_filename = filename
+    app.state.findings = []
+    app.state.incidents = []
+    app.state.informational_findings = []
+    app.state.hypotheses = []
+    app.state.analysis_ready = False
+    app.state.gemini_interpretations = {}
+    app.state.gemini_correlations = {}
+    app.state.gemini_reports = {}
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/upload/preview")
+def preview_workbook_upload(
+    file: Annotated[UploadFile, File()],
+    sheet_name: Annotated[str | None, Form()] = None,
+    header_row: Annotated[int | None, Form()] = None,
+) -> dict[str, Any]:
+    if Path(file.filename or "").suffix.casefold() != ".xlsx":
+        raise HTTPException(status_code=400, detail="El archivo debe tener extensión .xlsx.")
+    try:
+        return preview_workbook(file.file, sheet_name, header_row)
+    except WorkbookValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/upload/mapped")
+def upload_mapped_workbook(
+    file: Annotated[UploadFile, File()],
+    sheet_name: Annotated[str, Form()],
+    header_row: Annotated[int, Form()],
+    column_mapping: Annotated[str, Form()],
+) -> dict[str, Any]:
+    filename = file.filename or ""
+    if Path(filename).suffix.casefold() != ".xlsx":
+        raise HTTPException(status_code=400, detail="El archivo debe tener extensión .xlsx.")
+    try:
+        mapping = json.loads(column_mapping)
+        if not isinstance(mapping, dict):
+            raise TypeError("El mapeo debe ser un objeto JSON.")
+        inspection = preview_workbook(file.file, sheet_name, header_row)
+        source_events = read_events_mapped(file.file, sheet_name, header_row, mapping)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"El mapeo del archivo no es válido: {exc}") from exc
+    except WorkbookValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _activate_workbook(filename, source_events)
+    return {
+        "filename": filename,
+        "event_count": len(app.state.events),
+        "columns": inspection["columns"],
+        "warnings": quality_warnings(app.state.events),
+        "source_sheet": sheet_name,
+        "header_row": header_row,
+    }
+
+
+@app.post("/api/ai/map-columns")
+def map_columns_with_gemini(request: ColumnMappingRequest) -> dict[str, Any]:
+    try:
+        result = suggest_column_mapping(request.columns, list(EXPECTED_COLUMNS))
+    except GeminiConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except GeminiAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    result["required_columns"] = list(REQUIRED_MAPPING_COLUMNS)
+    return result
 
 
 @app.post("/api/upload")
@@ -48,22 +133,12 @@ def upload_workbook(file: Annotated[UploadFile, File()]) -> dict[str, Any]:
     except WorkbookValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    events = normalize_events(source_events)
-    app.state.events = events
-    app.state.source_filename = filename
-    app.state.findings = []
-    app.state.incidents = []
-    app.state.informational_findings = []
-    app.state.hypotheses = []
-    app.state.analysis_ready = False
-    app.state.gemini_interpretations = {}
-    app.state.gemini_correlations = {}
-    app.state.gemini_reports = {}
+    _activate_workbook(filename, source_events)
     return {
         "filename": filename,
-        "event_count": len(events),
+        "event_count": len(app.state.events),
         "columns": list(EXPECTED_COLUMNS),
-        "warnings": quality_warnings(events),
+        "warnings": quality_warnings(app.state.events),
     }
 
 

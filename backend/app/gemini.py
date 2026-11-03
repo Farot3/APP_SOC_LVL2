@@ -25,6 +25,89 @@ def gemini_status() -> dict[str, Any]:
     }
 
 
+def suggest_column_mapping(columns: list[str], canonical_fields: list[str]) -> dict[str, Any]:
+    if not columns or len(columns) > 100 or any(not isinstance(column, str) or not column.strip() for column in columns):
+        raise GeminiAPIError(400, "La lista de encabezados para mapear está vacía o no es válida.")
+    if len(columns) != len(set(columns)):
+        raise GeminiAPIError(400, "Hay encabezados repetidos; no se puede proponer un mapeo inequívoco.")
+
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise GeminiConfigurationError("Gemini no está configurado. Define GEMINI_API_KEY en el entorno del backend.")
+    model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip() or "gemini-3.6-flash"
+    try:
+        configured_timeout = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "60"))
+    except ValueError as exc:
+        raise GeminiConfigurationError("GEMINI_TIMEOUT_SECONDS debe ser un número.") from exc
+    timeout_seconds = max(5.0, min(configured_timeout, 300.0))
+    field_schema = {field: {"type": "string"} for field in canonical_fields}
+    prompt = f"""Relaciona los encabezados de una exportación SIEM con los campos canónicos.
+Usa exclusivamente los encabezados exactamente como aparecen en la lista. Para un campo sin correspondencia segura, devuelve una cadena vacía. No asignes un mismo encabezado a dos campos. Devuelve solo JSON con objeto mapping; no inventes campos ni valores.
+Campos canónicos: {json.dumps(canonical_fields, ensure_ascii=False)}
+Encabezados del archivo: {json.dumps(columns, ensure_ascii=False)}
+No se proporcionaron filas ni valores de eventos; decide solo por el significado de los encabezados."""
+    request_payload = {
+        "model": model,
+        "input": prompt,
+        "response_format": {
+            "type": "text",
+            "mime_type": "application/json",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "mapping": {
+                        "type": "object",
+                        "properties": field_schema,
+                        "required": canonical_fields,
+                    }
+                },
+                "required": ["mapping"],
+            },
+        },
+    }
+    try:
+        response = httpx.post(
+            _INTERACTIONS_URL,
+            headers={"x-goog-api-key": api_key},
+            json=request_payload,
+            timeout=timeout_seconds,
+        )
+    except httpx.TimeoutException as exc:
+        raise GeminiAPIError(504, "Gemini tardó demasiado en responder. Intenta nuevamente.") from exc
+    except httpx.RequestError as exc:
+        raise GeminiAPIError(502, "No se pudo conectar con Gemini.") from exc
+    if response.is_error:
+        if response.status_code == 429:
+            raise GeminiAPIError(429, "Gemini alcanzó el límite de solicitudes. Intenta más tarde.")
+        if response.status_code == 503:
+            raise GeminiAPIError(503, "Gemini está temporalmente ocupado. Intenta nuevamente más tarde.")
+        raise GeminiAPIError(502, f"Gemini rechazó la solicitud (HTTP {response.status_code}).")
+
+    try:
+        response_payload = response.json()
+    except ValueError as exc:
+        raise GeminiAPIError(502, "Gemini devolvió una respuesta de API inválida.") from exc
+    if not isinstance(response_payload, dict):
+        raise GeminiAPIError(502, "Gemini devolvió una respuesta de API con formato inesperado.")
+    output_text = _output_text(response_payload)
+    try:
+        parsed = json.loads(output_text)
+    except json.JSONDecodeError as exc:
+        raise GeminiAPIError(502, "Gemini devolvió un mapeo que no es JSON válido.") from exc
+    proposed = parsed.get("mapping") if isinstance(parsed, dict) else None
+    if not isinstance(proposed, dict) or set(proposed) != set(canonical_fields):
+        raise GeminiAPIError(502, "Gemini devolvió campos de mapeo incompletos o inesperados.")
+    if any(not isinstance(value, str) or (value and value not in columns) for value in proposed.values()):
+        raise GeminiAPIError(502, "Gemini propuso un encabezado que no existe en el archivo.")
+    selected = [value for value in proposed.values() if value]
+    if len(selected) != len(set(selected)):
+        raise GeminiAPIError(502, "Gemini asignó el mismo encabezado a varios campos.")
+    return {
+        "model": model,
+        "mapping": {field: proposed[field] or None for field in canonical_fields},
+    }
+
+
 def _schema() -> dict[str, Any]:
     return {
         "type": "object",

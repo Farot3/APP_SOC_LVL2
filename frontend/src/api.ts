@@ -108,11 +108,43 @@ export interface GeminiTechnicalReport {
 
 export type GeminiAnalysisReport = GeminiExecutiveReport | GeminiTechnicalReport;
 
+export type CanonicalEventField =
+  | "Log_ID"
+  | "Timestamp"
+  | "Hostname"
+  | "Event_ID"
+  | "User"
+  | "Source_IP"
+  | "Destination"
+  | "Log_Source"
+  | "Event_Description"
+  | "Process_CommandLine"
+  | "Result"
+  | "Severity";
+
+export interface WorkbookPreview {
+  sheet_names: string[];
+  sheet_name: string;
+  header_row: number;
+  columns: string[];
+  suggested_mapping: Record<CanonicalEventField, string | null>;
+  required_columns: CanonicalEventField[];
+  missing_required_columns: CanonicalEventField[];
+}
+
+export interface ColumnMappingSuggestion {
+  model: string;
+  mapping: Record<CanonicalEventField, string | null>;
+  required_columns: CanonicalEventField[];
+}
+
 export interface UploadResult {
   filename: string;
   event_count: number;
   columns: string[];
   warnings: string[];
+  source_sheet?: string;
+  header_row?: number;
 }
 
 export interface EventRecord {

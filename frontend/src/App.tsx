@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
   apiRequest,
   type AnalysisResult,
+  type CanonicalEventField,
+  type ColumnMappingSuggestion,
   type Dashboard,
   type EventPage,
   type EventRecord,
@@ -14,6 +16,7 @@ import {
   type Incident,
   type IncidentList,
   type UploadResult,
+  type WorkbookPreview,
 } from "./api";
 
 type Section = "dashboard" | "incidents" | "events";
@@ -27,6 +30,10 @@ type EventFilters = {
 };
 
 const PAGE_SIZE = 25;
+const CANONICAL_FIELDS: CanonicalEventField[] = [
+  "Log_ID", "Timestamp", "Hostname", "Event_ID", "User", "Source_IP", "Destination",
+  "Log_Source", "Event_Description", "Process_CommandLine", "Result", "Severity",
+];
 const EMPTY_FILTERS: EventFilters = {
   host: "",
   user: "",
@@ -91,6 +98,13 @@ function App() {
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [upload, setUpload] = useState<UploadResult | null>(null);
+  const [workbookPreview, setWorkbookPreview] = useState<WorkbookPreview | null>(null);
+  const [mappingDraft, setMappingDraft] = useState<Partial<Record<CanonicalEventField, string | null>>>({});
+  const [sheetDraft, setSheetDraft] = useState("");
+  const [headerRowDraft, setHeaderRowDraft] = useState("1");
+  const [previewStale, setPreviewStale] = useState(false);
+  const [mappingBusy, setMappingBusy] = useState(false);
+  const [mappingError, setMappingError] = useState("");
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [incidentList, setIncidentList] = useState<Incident[]>([]);
@@ -150,21 +164,93 @@ function App() {
     }
   }
 
-  async function uploadWorkbook(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function previewWorkbook(sheetName?: string, headerRow?: number) {
+    if (headerRow !== undefined && (!Number.isInteger(headerRow) || headerRow < 1)) {
+      setError("La fila de encabezados debe ser un entero mayor que cero.");
+      return;
+    }
     if (!selectedFile) {
       setError("Selecciona un archivo .xlsx antes de continuar.");
       return;
     }
-
     setBusy("upload");
     setError("");
     setNotice("");
     try {
       const form = new FormData();
       form.append("file", selectedFile);
-      const result = await apiRequest<UploadResult>("/api/upload", { method: "POST", body: form });
+      if (sheetName) form.append("sheet_name", sheetName);
+      if (headerRow) form.append("header_row", String(headerRow));
+      const preview = await apiRequest<WorkbookPreview>("/api/upload/preview", { method: "POST", body: form });
+      setWorkbookPreview(preview);
+      setMappingDraft(preview.suggested_mapping);
+      setSheetDraft(preview.sheet_name);
+      setHeaderRowDraft(String(preview.header_row));
+      setPreviewStale(false);
+      setMappingError("");
+      setUpload(null);
+      setAnalysis(null);
+      setDashboard(null);
+      setIncidentList([]);
+      setSelectedIncident(null);
+      setGeminiResult(null);
+      setGeminiError("");
+      setGeminiCorrelation(null);
+      setGeminiCorrelationError("");
+      setExecutiveReport(null);
+      setTechnicalReport(null);
+      setGeminiReportError("");
+      setNotice(`Se detectó la hoja “${preview.sheet_name}”, fila de encabezados ${preview.header_row}. Revisa el mapeo antes de importar.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No se pudo leer la estructura del Excel.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function uploadWorkbook(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await previewWorkbook();
+  }
+
+  async function suggestColumnMapping() {
+    if (!workbookPreview || previewStale || !geminiStatus?.enabled || mappingBusy) return;
+    setMappingBusy(true);
+    setMappingError("");
+    try {
+      const suggestion = await apiRequest<ColumnMappingSuggestion>("/api/ai/map-columns", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ columns: workbookPreview.columns }),
+      });
+      setMappingDraft(suggestion.mapping);
+      setNotice(`Gemini sugirió un mapeo con ${suggestion.model}; revísalo y confirma antes de importar.`);
+    } catch (caught) {
+      setMappingError(caught instanceof Error ? caught.message : "Gemini no pudo sugerir el mapeo.");
+    } finally {
+      setMappingBusy(false);
+    }
+  }
+
+  async function importMappedWorkbook() {
+    if (!selectedFile || !workbookPreview) return;
+    const missing = workbookPreview.required_columns.filter((field) => !mappingDraft[field]);
+    if (missing.length) {
+      setMappingError(`Asigna los campos obligatorios: ${missing.join(", ")}.`);
+      return;
+    }
+    setBusy("upload");
+    setError("");
+    setMappingError("");
+    try {
+      const form = new FormData();
+      form.append("file", selectedFile);
+      form.append("sheet_name", workbookPreview.sheet_name);
+      form.append("header_row", String(workbookPreview.header_row));
+      form.append("column_mapping", JSON.stringify(mappingDraft));
+      const result = await apiRequest<UploadResult>("/api/upload/mapped", { method: "POST", body: form });
       setUpload(result);
+      setWorkbookPreview(null);
       setAnalysis(null);
       setDashboard(null);
       setIncidentList([]);
@@ -179,10 +265,10 @@ function App() {
       setRiskFilter("");
       setActiveFilters(EMPTY_FILTERS);
       setFilterDraft(EMPTY_FILTERS);
-      setNotice(`Se cargaron ${result.event_count} eventos. Ya puedes ejecutar el análisis.`);
+      setNotice(`Se importaron ${result.event_count} eventos desde “${result.source_sheet}”. Ya puedes ejecutar el análisis.`);
       await loadEvents(1, EMPTY_FILTERS);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No se pudo cargar el Excel.");
+      setMappingError(caught instanceof Error ? caught.message : "No se pudo importar el Excel con este mapeo.");
     } finally {
       setBusy(null);
     }
@@ -344,17 +430,64 @@ function App() {
               <input
                 type="file"
                 accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+                disabled={busy !== null || mappingBusy}
+                onChange={(event) => {
+                  setSelectedFile(event.target.files?.[0] ?? null);
+                  setWorkbookPreview(null);
+                  setMappingError("");
+                }}
               />
             </label>
-            <button className="button button-secondary" type="submit" disabled={!selectedFile || busy !== null || geminiBusy || geminiCorrelationBusy || geminiReportBusy}>
-              {busy === "upload" ? "Cargando…" : "Cargar Excel"}
+            <button className="button button-secondary" type="submit" disabled={!selectedFile || busy !== null || mappingBusy || geminiBusy || geminiCorrelationBusy || geminiReportBusy}>
+              {busy === "upload" ? "Leyendo…" : "Revisar formato"}
             </button>
             <button className="button button-primary" type="button" onClick={analyzeWorkbook} disabled={!upload || busy !== null || geminiBusy || geminiCorrelationBusy || geminiReportBusy}>
               {busy === "analysis" ? "Analizando…" : analysis ? "Volver a analizar" : "Analizar archivo"}
             </button>
           </form>
         </section>
+
+        {workbookPreview && (
+          <section className="mapping-panel" aria-labelledby="mapping-title">
+            <div className="mapping-panel-heading">
+              <div><span className="section-kicker">IMPORTACIÓN FLEXIBLE</span><h2 id="mapping-title">Revisa cómo se interpretarán las columnas</h2></div>
+              <button className="button button-quiet" disabled={busy !== null || mappingBusy} onClick={() => void previewWorkbook(sheetDraft, Number(headerRowDraft))} type="button">Actualizar vista previa</button>
+            </div>
+            <p>La detección automática busca encabezados equivalentes. Confirma hoja, fila y correspondencias antes de importar; el análisis usará estas columnas normalizadas.</p>
+            <div className="mapping-source-controls">
+              <label>Hoja del Excel<select disabled={mappingBusy || busy !== null} value={sheetDraft} onChange={(event) => { setSheetDraft(event.target.value); setPreviewStale(true); }}>{workbookPreview.sheet_names.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+              <label>Fila de encabezados<input disabled={mappingBusy || busy !== null} min="1" type="number" value={headerRowDraft} onChange={(event) => { setHeaderRowDraft(event.target.value); setPreviewStale(true); }} /></label>
+            </div>
+            {previewStale && <p className="mapping-warning">Cambiaste la hoja o fila. Actualiza la vista previa antes de sugerir o confirmar el mapeo.</p>}
+            <div className="mapping-grid">
+              {CANONICAL_FIELDS.map((field) => {
+                const required = workbookPreview.required_columns.includes(field);
+                return (
+                  <label className="mapping-field" key={field}>
+                    <span>{field}{required && <strong>Obligatoria</strong>}</span>
+                    <select disabled={mappingBusy || busy !== null} value={mappingDraft[field] ?? ""} onChange={(event) => setMappingDraft((current) => ({ ...current, [field]: event.target.value || null }))}>
+                      <option value="">— Sin asignar —</option>
+                      {workbookPreview.columns.map((column) => <option key={`${field}-${column}`} value={column}>{column}</option>)}
+                    </select>
+                  </label>
+                );
+              })}
+            </div>
+            {workbookPreview.missing_required_columns.length > 0 && <p className="mapping-warning">No se detectaron automáticamente: {workbookPreview.missing_required_columns.join(", ")}. Asígnalos manualmente o prueba la sugerencia de Gemini.</p>}
+            {mappingError && <p className="gemini-error" role="alert">{mappingError}</p>}
+            <div className="mapping-actions">
+              <div>
+                <button className="button button-quiet" disabled={!geminiStatus?.enabled || geminiLoading || mappingBusy || busy !== null || previewStale} onClick={() => void suggestColumnMapping()} type="button">
+                  {mappingBusy ? "Consultando Gemini…" : "Sugerir mapeo con Gemini"}
+                </button>
+                <span className="mapping-privacy">Solo se envían los nombres de las columnas, nunca filas ni valores de eventos. Revisa la propuesta antes de importar.</span>
+              </div>
+              <button className="button button-primary" disabled={busy !== null || mappingBusy || previewStale || workbookPreview.required_columns.some((field) => !mappingDraft[field])} onClick={() => void importMappedWorkbook()} type="button">
+                {busy === "upload" ? "Importando…" : "Confirmar mapeo e importar"}
+              </button>
+            </div>
+          </section>
+        )}
 
         {upload && (
           <aside className="quality-panel" aria-labelledby="quality-title">
@@ -381,7 +514,7 @@ function App() {
         {error && <div className="alert alert-error" role="alert">{error}</div>}
         {notice && !error && <div className="alert alert-success" role="status">{notice}</div>}
 
-        {!upload && (
+        {!upload && !workbookPreview && (
           <section className="empty-state welcome-state">
             <div className="empty-icon" aria-hidden="true">↥</div>
             <h2>Empieza con un archivo SIEM</h2>

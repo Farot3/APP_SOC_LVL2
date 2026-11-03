@@ -39,13 +39,17 @@ Abre la dirección que muestre Vite (por defecto `http://127.0.0.1:5173`). Vite 
 
 ## Recorrido de prueba actual
 
-1. Selecciona el Excel de referencia y pulsa **Cargar Excel**. Debe indicar 715 eventos y 12 columnas; las observaciones de calidad aparecen resumidas por cantidad.
-2. Pulsa **Analizar archivo**. La línea base determinista muestra 35 hallazgos y seis incidentes.
+1. Selecciona un `.xlsx` y pulsa **Revisar formato**. La aplicación busca la hoja y fila de encabezados y propone equivalencias de columnas. Revisa el mapeo; si hace falta, ajústalo y pulsa **Confirmar mapeo e importar**. También puedes pedir a Gemini una sugerencia explícita basada solo en los nombres de columnas; revisa y confirma esa sugerencia antes de importar.
+2. Pulsa **Analizar archivo**. La línea base determinista aplica R01–R14 sobre los eventos normalizados. Con el Excel de referencia se esperan 715 eventos, 35 hallazgos y seis incidentes.
 3. Revisa el dashboard y las hipótesis no confirmadas. Si Gemini está configurado, en **Correlación IA de hallazgos** puedes pulsar **Proponer correlación con Gemini**; es una llamada opcional que propone grupos sin modificar los incidentes deterministas.
 4. Abre **Incidentes** y revisa riesgo, reglas, entidades, cronología y `Log_ID`.
 5. En **Resumen**, genera el **informe ejecutivo** o el **informe técnico** solo si necesitas cada uno. Cada acción puede consumir una llamada a Gemini; la respuesta validada queda en memoria para evitar repetirla. Puedes pulsar **Imprimir / Guardar PDF** en cada resultado.
 6. Desde el detalle de un incidente, pulsa **Imprimir / Guardar informe PDF** para imprimir su cronología y la interpretación IA disponible.
 7. Abre **Eventos**, prueba los filtros y la paginación.
+
+## Importación de formatos Excel
+
+El importador busca encabezados en las hojas del libro y reconoce varios nombres habituales para los campos canónicos. Puedes seleccionar la hoja/fila y corregir manualmente cualquier asignación antes de importar. Se requieren hora, host, ID de evento, usuario, IP de origen, descripción y resultado; campos auxiliares ausentes quedan vacíos y los registros sin `Log_ID` reciben un identificador local de fila. Si el formato es muy distinto, mapea manualmente las columnas o usa **Sugerir mapeo con Gemini**. Esa acción envía a Google solo los nombres de encabezado —nunca las filas de eventos— y requiere confirmación manual. El análisis continúa usando el esquema normalizado y las reglas deterministas existentes.
 
 ## Interpretación opcional con Gemini
 
