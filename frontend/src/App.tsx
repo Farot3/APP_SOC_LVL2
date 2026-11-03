@@ -796,7 +796,7 @@ function DashboardView({
         )}
       </Panel>
 
-      <Panel title="Informes IA · fase 6">
+      <Panel title="Informes IA">
         <p className="report-intro">Genera cada informe por separado y solo cuando lo solicites. Cada botón puede realizar una llamada a Gemini; los resultados se guardan en memoria por tipo y modelo. Se envían a Google los hallazgos y eventos relevantes. La IA no modifica la línea base determinista.</p>
         {!geminiEnabled && <p className="muted-copy">Configura GEMINI_API_KEY en el backend para habilitar la generación de informes.</p>}
         <div className="report-generation-actions">
@@ -983,7 +983,7 @@ function EventsView({
       <Panel title="Filtros">
         <form className="filter-form" onSubmit={onSubmit}>
           <label>Host<input value={filterDraft.host} onChange={(event) => setFilter("host", event.target.value)} placeholder="WEB-01" /></label>
-          <label>Usuario<input value={filterDraft.user} onChange={(event) => setFilter("user", event.target.value)} placeholder="CORP\\admin" /></label>
+          <label>Usuario<input value={filterDraft.user} onChange={(event) => setFilter("user", event.target.value)} placeholder="CORP\admin" /></label>
           <label>IP origen<input value={filterDraft.source_ip} onChange={(event) => setFilter("source_ip", event.target.value)} placeholder="192.0.2.91" /></label>
           <label>Event_ID<input value={filterDraft.event_id} onChange={(event) => setFilter("event_id", event.target.value)} placeholder="4625" /></label>
           <label>Desde<input type="datetime-local" value={filterDraft.start_time} onChange={(event) => setFilter("start_time", event.target.value)} /></label>
