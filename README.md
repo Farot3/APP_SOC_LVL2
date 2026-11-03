@@ -4,7 +4,7 @@ Aplicación local para revisar eventos exportados desde un SIEM, identificar inc
 
 ## Estado actual
 
-La aplicación carga el Excel, normaliza los eventos y analiza patrones mediante reglas deterministas R01–R14. El dashboard y el riesgo siguen basándose en esos resultados; Gemini es optativo y, bajo demanda, puede clasificar los hallazgos de un incidente o proponer una correlación alternativa entre todos los hallazgos. Las propuestas no reemplazan la línea base. Desde el detalle puedes imprimir o guardar en PDF un informe individual con los hallazgos, el análisis IA disponible y toda la cronología.
+La aplicación carga el Excel, normaliza los eventos y analiza patrones mediante reglas deterministas R01–R14. El dashboard y el riesgo siguen basándose en esos resultados; Gemini es optativo y, bajo demanda, puede clasificar hallazgos por incidente, proponer una correlación global y generar informes ejecutivo y técnico. Las propuestas no reemplazan la línea base. Desde el dashboard puedes generar cada informe por separado y guardarlo como PDF; desde el detalle también puedes imprimir un informe individual con la cronología.
 
 Con el libro de referencia `SOC_L2_Logs_Ampliados_Multiples_Incidentes.xlsx` (715 eventos, 12 columnas), el análisis actual produce 35 hallazgos de reglas y seis incidentes. Hallazgos e incidentes son conceptos distintos. Las coincidencias débiles entre subredes se presentan como hipótesis, no como relaciones confirmadas.
 
@@ -43,8 +43,9 @@ Abre la dirección que muestre Vite (por defecto `http://127.0.0.1:5173`). Vite 
 2. Pulsa **Analizar archivo**. La línea base determinista muestra 35 hallazgos y seis incidentes.
 3. Revisa el dashboard y las hipótesis no confirmadas. Si Gemini está configurado, en **Correlación IA de hallazgos** puedes pulsar **Proponer correlación con Gemini**; es una llamada opcional que propone grupos sin modificar los incidentes deterministas.
 4. Abre **Incidentes** y revisa riesgo, reglas, entidades, cronología y `Log_ID`.
-5. Desde el detalle, pulsa **Imprimir / Guardar informe PDF** para generar el informe individual desde el diálogo del navegador. Si Gemini ya se ejecutó, el informe incorpora también la clasificación de hallazgos, el análisis de IP de origen y las comprobaciones recomendadas.
-6. Abre **Eventos**, prueba los filtros y la paginación.
+5. En **Resumen**, genera el **informe ejecutivo** o el **informe técnico** solo si necesitas cada uno. Cada acción puede consumir una llamada a Gemini; la respuesta validada queda en memoria para evitar repetirla. Puedes pulsar **Imprimir / Guardar PDF** en cada resultado.
+6. Desde el detalle de un incidente, pulsa **Imprimir / Guardar informe PDF** para imprimir su cronología y la interpretación IA disponible.
+7. Abre **Eventos**, prueba los filtros y la paginación.
 
 ## Interpretación opcional con Gemini
 
@@ -70,7 +71,7 @@ La clave permanece en el backend y no se guarda en el repositorio. Aun así, los
 
 En **Resumen**, **Proponer correlación con Gemini** envía los hallazgos detectados y solo los eventos citados por ellos para proponer incidentes alternativos o hallazgos aislados. El backend exige que cada `finding_id` aparezca exactamente una vez y que la evidencia citada corresponda a los hallazgos del grupo. La propuesta queda cacheada en memoria por análisis y modelo, y no modifica la correlación determinista. Esta acción hace una llamada adicional a Gemini; no se ejecuta al analizar el Excel.
 
-Consulta `backend/README.md` para preparar y validar la API. La hoja de ruta visible, el estado actual y los siguientes pasos están en [`docs/ROADMAP.md`](docs/ROADMAP.md).
+Consulta `backend/README.md` para preparar y validar la API. La hoja de ruta visible, el estado por fases y la validación pendiente de los informes en vivo están en [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Validación
 

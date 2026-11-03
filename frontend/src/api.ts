@@ -57,6 +57,57 @@ export interface GeminiCorrelation {
   cache_hit: boolean;
 }
 
+export interface GeminiReportBaseline {
+  event_count: number;
+  finding_count: number;
+  incident_count: number;
+  risk_by_incident: { incident_id: string; level: string | null; score: number | null }[];
+}
+
+export interface GeminiExecutiveReport {
+  report_type: "executive";
+  model: string;
+  summary: string;
+  key_points: {
+    heading: string;
+    detail: string;
+    finding_ids: string[];
+    evidence_ids: string[];
+  }[];
+  recommended_actions: {
+    priority: "Alta" | "Media" | "Baja";
+    action: string;
+    finding_ids: string[];
+    evidence_ids: string[];
+  }[];
+  limitations: string;
+  baseline: GeminiReportBaseline;
+  cache_hit: boolean;
+}
+
+export interface GeminiTechnicalReport {
+  report_type: "technical";
+  model: string;
+  summary: string;
+  incident_details: {
+    incident_id: string;
+    technical_summary: string;
+    finding_ids: string[];
+    technique_ids: string[];
+    evidence_ids: string[];
+  }[];
+  informational_findings: {
+    finding_id: string;
+    summary: string;
+    evidence_ids: string[];
+  }[];
+  limitations: string;
+  baseline: GeminiReportBaseline;
+  cache_hit: boolean;
+}
+
+export type GeminiAnalysisReport = GeminiExecutiveReport | GeminiTechnicalReport;
+
 export interface UploadResult {
   filename: string;
   event_count: number;

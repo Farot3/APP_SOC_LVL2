@@ -18,10 +18,8 @@ para aumentar la cobertura real.
   una llamada cubrió los 35 hallazgos en 20 grupos; la salida pasó la validación y
   no cambió la línea base determinista. La caché devolvió el resultado al consultar
   de nuevo, sin una llamada adicional.
-- **Fase 6: pendiente.** Informes IA ejecutivo y técnico.
-- **Fase 7: parcial/completada para la base actual.** Dashboard y detalle de
-incidentes están disponibles; el informe individual se imprime/guarda como PDF
-desde el navegador. Falta integrar los informes IA de la fase 6 cuando existan.
+- **Fase 6: implementada; validada automáticamente con mocks.** Informes ejecutivo y técnico bajo demanda, con validación de referencias y caché separada por tipo/modelo. No se ha hecho una llamada real para probar estos informes.
+- **Fase 7: implementada; validada con build.** El dashboard presenta cada informe por separado y permite imprimir/guardar cada resultado como PDF; también mantiene disponible el informe individual por incidente. Los PDF distinguen la línea base determinista y las advertencias de IA.
 
 ## Fases
 
@@ -71,19 +69,18 @@ hallazgos se repartieron en cuatro grupos de incidente y 16 hallazgos aislados; 
 respuesta pasó la validación. El resultado se recuperó luego de caché, sin otra
 llamada a Google. Las pruebas automatizadas usan mocks.
 
-### 6. Informes ejecutivo y técnico — pendiente
+### 6. Informes ejecutivo y técnico — implementada; pruebas automáticas aprobadas
 
-Generar dos salidas separadas y bajo demanda: un resumen ejecutivo y un informe
-técnico. Incluir citas verificables, limitaciones y separación clara entre hechos
-deterministas e interpretación IA. Mantener ambas salidas cacheadas por análisis y
-modelo. No generarlas automáticamente durante la carga o el análisis.
+- En **Resumen**, dos botones independientes generan, solo bajo demanda, un informe ejecutivo o uno técnico. Cada informe consume como máximo una llamada nueva; no se invocan durante la carga ni el análisis.
+- El informe ejecutivo incluye resumen, puntos clave y recomendaciones para revisión humana, con hallazgos y `Log_ID` verificables.
+- El informe técnico cubre exactamente los incidentes deterministas, sus hallazgos y técnicas de baseline, además de todos los hallazgos informativos separados como tales.
+- El backend rechaza IDs repetidos, hallazgos o incidentes omitidos, técnicas ajenas y evidencia que no corresponde al hallazgo. La respuesta conserva la línea base determinista y no puede alterar su riesgo.
+- La caché se mantiene en memoria por tipo/modelo y se borra al cargar otro Excel, volver a analizar o reiniciar el backend.
+- **Validación:** pruebas con respuestas simuladas cubren caché, cambio de modelo y rechazo de evidencia/técnicas inválidas. No se realizó una llamada real a Gemini para estos informes.
 
-### 7. Dashboard y PDF — base implementada, integración pendiente
+### 7. Dashboard y PDF — implementada; build aprobado
 
-El dashboard determinista, el detalle de incidentes y la impresión/guardado de un
-informe individual desde el navegador ya existen. Cuando se complete la fase 6,
-integrar los informes ejecutivo y técnico en las vistas y en una salida imprimible;
-verificar que los PDF mantengan evidencia, procedencia y advertencias de IA.
+Los informes aparecen en el dashboard, con estado de caché, modelo, citas, limitaciones y línea base determinista. Cada resultado tiene su acción propia **Imprimir / Guardar PDF**; la impresión selecciona únicamente ese informe (o el informe individual elegido). No se genera un informe automáticamente. La interfaz se validó con `npm run build`; la salida PDF se produce desde el diálogo de impresión del navegador.
 
 ## Presupuesto de llamadas y validación
 
@@ -100,7 +97,4 @@ Las pruebas automatizadas no hacen llamadas de red.
 
 ## Siguiente paso
 
-La fase 4 está implementada, probada automáticamente con mocks y validada en vivo
-con I-02 usando `gemini-3.6-flash`. La fase 5 también está implementada y tuvo una
-primera validación en vivo con los 35 hallazgos del Excel de referencia. El siguiente
-bloque es la fase 6: informes ejecutivo y técnico.
+Las fases 1–7 están implementadas. Las fases 4 y 5 cuentan además con validaciones reales iniciales del usuario usando `gemini-3.6-flash`. Las fases 6 y 7 se verificaron con pruebas simuladas y compilación, respectivamente; el paso opcional pendiente es que el usuario genere cada informe en su entorno y revise su contenido antes de usarlo.

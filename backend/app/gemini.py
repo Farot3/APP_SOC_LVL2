@@ -654,3 +654,469 @@ Paquete del análisis:
     if not output_text:
         raise GeminiAPIError(502, "Gemini no devolvió texto para la correlación.")
     return validate_correlation_output(output_text, findings, events, incidents, model)
+
+
+def _analysis_report_schema(report_type: str) -> dict[str, Any]:
+    string_array = {"type": "array", "items": {"type": "string"}}
+    if report_type == "executive":
+        return {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string"},
+                "key_points": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "heading": {"type": "string"},
+                            "detail": {"type": "string"},
+                            "finding_ids": string_array,
+                            "evidence_ids": string_array,
+                        },
+                        "required": ["heading", "detail", "finding_ids", "evidence_ids"],
+                    },
+                },
+                "recommended_actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "priority": {"type": "string", "enum": ["Alta", "Media", "Baja"]},
+                            "action": {"type": "string"},
+                            "finding_ids": string_array,
+                            "evidence_ids": string_array,
+                        },
+                        "required": ["priority", "action", "finding_ids", "evidence_ids"],
+                    },
+                },
+                "limitations": {"type": "string"},
+            },
+            "required": ["summary", "key_points", "recommended_actions", "limitations"],
+        }
+
+    return {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "incident_details": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "incident_id": {"type": "string"},
+                        "technical_summary": {"type": "string"},
+                        "finding_ids": string_array,
+                        "technique_ids": string_array,
+                        "evidence_ids": string_array,
+                    },
+                    "required": [
+                        "incident_id",
+                        "technical_summary",
+                        "finding_ids",
+                        "technique_ids",
+                        "evidence_ids",
+                    ],
+                },
+            },
+            "informational_findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "finding_id": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "evidence_ids": string_array,
+                    },
+                    "required": ["finding_id", "summary", "evidence_ids"],
+                },
+            },
+            "limitations": {"type": "string"},
+        },
+        "required": ["summary", "incident_details", "informational_findings", "limitations"],
+    }
+
+
+def _package_analysis_report(
+    findings: list[dict[str, Any]],
+    incidents: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    finding_fields = (
+        "finding_id",
+        "rule_id",
+        "name",
+        "explanation",
+        "technique_ids",
+        "event_ids",
+        "first_seen",
+        "last_seen",
+        "entities",
+    )
+    event_ids = {str(log_id) for finding in findings for log_id in finding.get("event_ids", [])}
+    event_fields = (
+        "Log_ID",
+        "Timestamp",
+        "Hostname",
+        "Event_ID",
+        "User",
+        "Source_IP",
+        "Destination",
+        "Event_Description",
+        "Process_CommandLine",
+    )
+    incident_fields = (
+        "incident_id",
+        "title",
+        "rule_ids",
+        "technique_ids",
+        "finding_ids",
+        "entities",
+        "risk",
+    )
+    assigned_ids = {finding_id for incident in incidents for finding_id in incident.get("finding_ids", [])}
+    return {
+        "baseline": {
+            "event_count": len(events),
+            "finding_count": len(findings),
+            "incident_count": len(incidents),
+            "risk_by_incident": [
+                {
+                    "incident_id": incident.get("incident_id"),
+                    "level": incident.get("risk", {}).get("level"),
+                    "score": incident.get("risk", {}).get("score"),
+                }
+                for incident in incidents
+            ],
+        },
+        "incidents": [
+            {field: incident.get(field) for field in incident_fields if field in incident}
+            for incident in incidents
+        ],
+        "informational_finding_ids": sorted(
+            str(finding.get("finding_id"))
+            for finding in findings
+            if finding.get("finding_id") not in assigned_ids
+        ),
+        "findings": [
+            {field: finding.get(field) for field in finding_fields if field in finding}
+            for finding in findings
+        ],
+        "events": [
+            {field: event.get(field) for field in event_fields if field in event}
+            for event in events
+            if str(event.get("Log_ID")) in event_ids
+        ],
+    }
+
+
+def _validated_report_citations(
+    finding_ids: Any,
+    evidence_ids: Any,
+    findings_by_id: dict[str, dict[str, Any]],
+    events_by_id: dict[str, dict[str, Any]],
+    label: str,
+) -> tuple[list[str], list[str]]:
+    if not isinstance(finding_ids, list) or not finding_ids or not all(
+        isinstance(value, str) for value in finding_ids
+    ):
+        raise GeminiAPIError(502, f"Gemini devolvió finding_ids inválidos en {label}.")
+    if len(set(finding_ids)) != len(finding_ids):
+        raise GeminiAPIError(502, f"Gemini repitió finding_id en {label}.")
+    if not set(finding_ids) <= set(findings_by_id):
+        raise GeminiAPIError(502, f"Gemini citó finding_id inexistentes en {label}.")
+    if not isinstance(evidence_ids, list) or not evidence_ids or not all(
+        isinstance(value, str) for value in evidence_ids
+    ):
+        raise GeminiAPIError(502, f"Gemini devolvió evidence_ids inválidos en {label}.")
+
+    cited_evidence = set(evidence_ids)
+    allowed_evidence = {
+        str(log_id)
+        for finding_id in finding_ids
+        for log_id in findings_by_id[finding_id].get("event_ids", [])
+    } & set(events_by_id)
+    if not cited_evidence <= allowed_evidence:
+        raise GeminiAPIError(502, f"Gemini citó evidencia ajena a los hallazgos de {label}.")
+    if any(
+        not cited_evidence
+        & {str(log_id) for log_id in findings_by_id[finding_id].get("event_ids", [])}
+        for finding_id in finding_ids
+    ):
+        raise GeminiAPIError(502, f"La evidencia citada en {label} debe respaldar cada hallazgo.")
+    return list(finding_ids), list(dict.fromkeys(evidence_ids))
+
+
+def validate_analysis_report(
+    output_text: str,
+    report_type: str,
+    findings: list[dict[str, Any]],
+    incidents: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    model: str,
+) -> dict[str, Any]:
+    try:
+        result = json.loads(output_text)
+    except json.JSONDecodeError as exc:
+        raise GeminiAPIError(502, "Gemini devolvió un informe que no es JSON válido.") from exc
+    if not isinstance(result, dict):
+        raise GeminiAPIError(502, "Gemini devolvió un informe con formato inesperado.")
+
+    summary = result.get("summary")
+    limitations = result.get("limitations")
+    if not isinstance(summary, str) or not summary.strip():
+        raise GeminiAPIError(502, "Gemini omitió el resumen del informe.")
+    if not isinstance(limitations, str) or not limitations.strip():
+        raise GeminiAPIError(502, "Gemini omitió las limitaciones del informe.")
+
+    findings_by_id = {str(finding.get("finding_id")): finding for finding in findings}
+    events_by_id = {str(event.get("Log_ID")): event for event in events}
+    if report_type == "executive":
+        key_points = result.get("key_points")
+        actions = result.get("recommended_actions")
+        if not isinstance(key_points, list) or not 1 <= len(key_points) <= 8:
+            raise GeminiAPIError(502, "Gemini devolvió una cantidad inválida de puntos ejecutivos.")
+        if not isinstance(actions, list) or len(actions) > 5:
+            raise GeminiAPIError(502, "Gemini devolvió demasiadas acciones ejecutivas.")
+
+        validated_points = []
+        for point in key_points:
+            if not isinstance(point, dict):
+                raise GeminiAPIError(502, "Gemini devolvió un punto ejecutivo inválido.")
+            heading = point.get("heading")
+            detail = point.get("detail")
+            if not isinstance(heading, str) or not heading.strip() or not isinstance(detail, str) or not detail.strip():
+                raise GeminiAPIError(502, "Gemini omitió el título o detalle de un punto ejecutivo.")
+            cited_findings, cited_logs = _validated_report_citations(
+                point.get("finding_ids"), point.get("evidence_ids"), findings_by_id, events_by_id, heading
+            )
+            validated_points.append(
+                {
+                    "heading": heading.strip(),
+                    "detail": detail.strip(),
+                    "finding_ids": cited_findings,
+                    "evidence_ids": cited_logs,
+                }
+            )
+
+        validated_actions = []
+        for action in actions:
+            if not isinstance(action, dict):
+                raise GeminiAPIError(502, "Gemini devolvió una acción ejecutiva inválida.")
+            priority = action.get("priority")
+            text = action.get("action")
+            if not isinstance(priority, str) or priority not in {"Alta", "Media", "Baja"}:
+                raise GeminiAPIError(502, "Gemini devolvió una prioridad no permitida.")
+            if not isinstance(text, str) or not text.strip():
+                raise GeminiAPIError(502, "Gemini omitió una acción recomendada.")
+            cited_findings, cited_logs = _validated_report_citations(
+                action.get("finding_ids"), action.get("evidence_ids"), findings_by_id, events_by_id, text
+            )
+            validated_actions.append(
+                {
+                    "priority": priority,
+                    "action": text.strip(),
+                    "finding_ids": cited_findings,
+                    "evidence_ids": cited_logs,
+                }
+            )
+
+        return {
+            "report_type": report_type,
+            "model": model,
+            "summary": summary.strip(),
+            "key_points": validated_points,
+            "recommended_actions": validated_actions,
+            "limitations": limitations.strip(),
+            "baseline": _package_analysis_report(findings, incidents, events)["baseline"],
+        }
+
+    if report_type != "technical":
+        raise GeminiAPIError(400, "Tipo de informe Gemini no soportado.")
+
+    incident_details = result.get("incident_details")
+    informational_findings = result.get("informational_findings")
+    if not isinstance(incident_details, list) or not isinstance(informational_findings, list):
+        raise GeminiAPIError(502, "Gemini devolvió secciones técnicas inválidas.")
+    incidents_by_id = {str(incident.get("incident_id")): incident for incident in incidents}
+    if len(incidents_by_id) != len(incidents):
+        raise GeminiAPIError(500, "El análisis contiene incident_id duplicados.")
+    validated_incidents_by_id: dict[str, dict[str, Any]] = {}
+    for detail in incident_details:
+        if not isinstance(detail, dict):
+            raise GeminiAPIError(502, "Gemini devolvió un detalle de incidente inválido.")
+        incident_id = detail.get("incident_id")
+        if not isinstance(incident_id, str) or incident_id not in incidents_by_id:
+            raise GeminiAPIError(502, "Gemini citó un incident_id que no existe.")
+        if incident_id in validated_incidents_by_id:
+            raise GeminiAPIError(502, "Gemini repitió un incidente en el informe técnico.")
+        incident = incidents_by_id[incident_id]
+        finding_ids, evidence_ids = _validated_report_citations(
+            detail.get("finding_ids"),
+            detail.get("evidence_ids"),
+            findings_by_id,
+            events_by_id,
+            incident_id,
+        )
+        if set(finding_ids) != set(incident.get("finding_ids", [])):
+            raise GeminiAPIError(502, "El informe técnico debe cubrir exactamente los hallazgos de cada incidente.")
+        technical_summary = detail.get("technical_summary")
+        techniques = detail.get("technique_ids")
+        if not isinstance(technical_summary, str) or not technical_summary.strip():
+            raise GeminiAPIError(502, "Gemini omitió el resumen técnico de un incidente.")
+        if not isinstance(techniques, list) or not all(isinstance(value, str) for value in techniques):
+            raise GeminiAPIError(502, "Gemini devolvió técnicas inválidas en el informe técnico.")
+        if set(techniques) != set(incident.get("technique_ids", [])):
+            raise GeminiAPIError(502, "Las técnicas del informe deben coincidir exactamente con las técnicas de la línea base.")
+        validated_incidents_by_id[incident_id] = {
+            "incident_id": incident_id,
+            "technical_summary": technical_summary.strip(),
+            "finding_ids": finding_ids,
+            "technique_ids": list(dict.fromkeys(techniques)),
+            "evidence_ids": evidence_ids,
+        }
+
+    if set(validated_incidents_by_id) != set(incidents_by_id):
+        raise GeminiAPIError(502, "Gemini omitió incidentes del informe técnico.")
+
+    assigned_finding_ids = {finding_id for incident in incidents for finding_id in incident.get("finding_ids", [])}
+    expected_informational_ids = set(findings_by_id) - assigned_finding_ids
+    validated_information_by_id: dict[str, dict[str, Any]] = {}
+    for item in informational_findings:
+        if not isinstance(item, dict):
+            raise GeminiAPIError(502, "Gemini devolvió un hallazgo informativo inválido.")
+        finding_id = item.get("finding_id")
+        text = item.get("summary")
+        if not isinstance(finding_id, str) or finding_id not in expected_informational_ids:
+            raise GeminiAPIError(502, "Gemini citó un finding_id informativo inválido.")
+        if finding_id in validated_information_by_id:
+            raise GeminiAPIError(502, "Gemini repitió un hallazgo informativo.")
+        if not isinstance(text, str) or not text.strip():
+            raise GeminiAPIError(502, "Gemini omitió el resumen de un hallazgo informativo.")
+        _, evidence_ids = _validated_report_citations(
+            [finding_id], item.get("evidence_ids"), findings_by_id, events_by_id, finding_id
+        )
+        validated_information_by_id[finding_id] = {
+            "finding_id": finding_id,
+            "summary": text.strip(),
+            "evidence_ids": evidence_ids,
+        }
+    if set(validated_information_by_id) != expected_informational_ids:
+        raise GeminiAPIError(502, "Gemini omitió hallazgos informativos del informe técnico.")
+
+    return {
+        "report_type": report_type,
+        "model": model,
+        "summary": summary.strip(),
+        "incident_details": [
+            validated_incidents_by_id[str(incident["incident_id"])] for incident in incidents
+        ],
+        "informational_findings": [
+            validated_information_by_id[finding_id]
+            for finding_id in sorted(expected_informational_ids)
+        ],
+        "limitations": limitations.strip(),
+        "baseline": _package_analysis_report(findings, incidents, events)["baseline"],
+    }
+
+
+def generate_analysis_report(
+    report_type: str,
+    findings: list[dict[str, Any]],
+    incidents: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if report_type not in {"executive", "technical"}:
+        raise GeminiAPIError(400, "Tipo de informe Gemini no soportado.")
+    finding_ids = [str(finding.get("finding_id")) for finding in findings]
+    if len(finding_ids) != len(set(finding_ids)):
+        raise GeminiAPIError(409, "El análisis contiene finding_id duplicados; vuelve a analizar antes de generar el informe.")
+    incident_ids = [str(incident.get("incident_id")) for incident in incidents]
+    if len(incident_ids) != len(set(incident_ids)):
+        raise GeminiAPIError(409, "El análisis contiene incident_id duplicados; vuelve a analizar antes de generar el informe.")
+    event_ids = [str(event.get("Log_ID")) for event in events]
+    if len(event_ids) != len(set(event_ids)):
+        raise GeminiAPIError(409, "El análisis contiene Log_ID duplicados; vuelve a cargar el archivo antes de generar el informe.")
+
+    known_finding_ids = set(finding_ids)
+    known_event_ids = set(event_ids)
+    assigned_finding_ids = [
+        str(finding_id)
+        for incident in incidents
+        for finding_id in incident.get("finding_ids", [])
+    ]
+    if not set(assigned_finding_ids) <= known_finding_ids or len(assigned_finding_ids) != len(set(assigned_finding_ids)):
+        raise GeminiAPIError(409, "La línea base contiene asignaciones de hallazgos inválidas; vuelve a analizar antes de generar el informe.")
+    if any(
+        not {str(event_id) for event_id in finding.get("event_ids", [])} <= known_event_ids
+        for finding in findings
+    ):
+        raise GeminiAPIError(409, "La línea base contiene evidencia Log_ID inexistente; vuelve a analizar antes de generar el informe.")
+
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise GeminiConfigurationError("Gemini no está configurado. Define GEMINI_API_KEY en el entorno del backend.")
+    model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip() or "gemini-3.6-flash"
+    try:
+        configured_timeout = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "60"))
+    except ValueError as exc:
+        raise GeminiConfigurationError("GEMINI_TIMEOUT_SECONDS debe ser un número.") from exc
+    timeout_seconds = max(5.0, min(configured_timeout, 300.0))
+    package_json = json.dumps(
+        _package_analysis_report(findings, incidents, events),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    if report_type == "executive":
+        prompt = f"""Redacta un informe ejecutivo SOC conciso basándote exclusivamente en el paquete.
+Resume el estado sin recalcular ni cambiar el riesgo determinista. Distingue observaciones de inferencias y no afirmes que un incidente está confirmado.
+Incluye entre 1 y 8 puntos clave, cada uno citado con finding_ids y Log_ID exactos. Propón como máximo cinco acciones prioritarias para analistas humanos; no ejecutes acciones. Cada recomendación debe citar hallazgos y evidencia que la motivan. No inventes atribución, reputación de IP ni impacto no observado.
+Devuelve limitations con las incertidumbres importantes. Usa los niveles de riesgo del baseline como datos de referencia, no los sustituyas.
+
+Paquete:
+{package_json}"""
+    else:
+        prompt = f"""Redacta un informe técnico SOC detallado pero conciso, basándote exclusivamente en el paquete.
+Devuelve exactamente un incident_details por cada incidente determinista y cubre exactamente sus finding_ids. Para cada incidente resume la secuencia observada, incluye exactamente el conjunto technique_ids del incidente y evidencia Log_ID que pertenezca a los hallazgos citados.
+Incluye exactamente cada informational_finding_id como un elemento de informational_findings; no lo presentes como incidente. Cada cita debe existir y pertenecer al hallazgo correspondiente.
+Distingue hechos de inferencias, no inventes cronologías, causas, técnicas ni acciones realizadas. No cambies incidentes, puntuaciones ni niveles de riesgo deterministas. Devuelve también limitations.
+
+Paquete:
+{package_json}"""
+
+    request_payload = {
+        "model": model,
+        "input": prompt,
+        "response_format": {
+            "type": "text",
+            "mime_type": "application/json",
+            "schema": _analysis_report_schema(report_type),
+        },
+    }
+    try:
+        response = httpx.post(
+            _INTERACTIONS_URL,
+            headers={"x-goog-api-key": api_key},
+            json=request_payload,
+            timeout=timeout_seconds,
+        )
+    except httpx.TimeoutException as exc:
+        raise GeminiAPIError(504, "Gemini tardó demasiado en responder. Intenta nuevamente.") from exc
+    except httpx.RequestError as exc:
+        raise GeminiAPIError(502, "No se pudo conectar con Gemini.") from exc
+    if response.is_error:
+        if response.status_code == 429:
+            raise GeminiAPIError(429, "Gemini alcanzó el límite de solicitudes. Intenta más tarde.")
+        if response.status_code == 503:
+            raise GeminiAPIError(503, "Gemini está temporalmente ocupado. Intenta nuevamente más tarde.")
+        raise GeminiAPIError(502, f"Gemini rechazó la solicitud (HTTP {response.status_code}).")
+    try:
+        response_payload = response.json()
+    except ValueError as exc:
+        raise GeminiAPIError(502, "Gemini devolvió una respuesta de API inválida.") from exc
+    if not isinstance(response_payload, dict):
+        raise GeminiAPIError(502, "Gemini devolvió una respuesta de API con formato inesperado.")
+    output_text = _output_text(response_payload)
+    if not output_text:
+        raise GeminiAPIError(502, "Gemini no devolvió texto para el informe.")
+    return validate_analysis_report(output_text, report_type, findings, incidents, events, model)

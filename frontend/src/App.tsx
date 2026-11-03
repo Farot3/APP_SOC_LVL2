@@ -5,8 +5,11 @@ import {
   type Dashboard,
   type EventPage,
   type EventRecord,
+  type GeminiAnalysisReport,
   type GeminiCorrelation,
+  type GeminiExecutiveReport,
   type GeminiInterpretation,
+  type GeminiTechnicalReport,
   type GeminiStatus,
   type Incident,
   type IncidentList,
@@ -110,6 +113,17 @@ function App() {
   const [geminiCorrelation, setGeminiCorrelation] = useState<GeminiCorrelation | null>(null);
   const [geminiCorrelationBusy, setGeminiCorrelationBusy] = useState(false);
   const [geminiCorrelationError, setGeminiCorrelationError] = useState("");
+  const [executiveReport, setExecutiveReport] = useState<GeminiExecutiveReport | null>(null);
+  const [technicalReport, setTechnicalReport] = useState<GeminiTechnicalReport | null>(null);
+  const [geminiReportBusy, setGeminiReportBusy] = useState(false);
+  const [geminiReportError, setGeminiReportError] = useState("");
+  const [printTarget, setPrintTarget] = useState<"incident" | "executive" | "technical" | null>(null);
+
+  useEffect(() => {
+    const handleAfterPrint = () => setPrintTarget(null);
+    window.addEventListener("afterprint", handleAfterPrint);
+    return () => window.removeEventListener("afterprint", handleAfterPrint);
+  }, []);
 
   useEffect(() => {
     apiRequest<GeminiStatus>("/api/ai/status")
@@ -159,6 +173,9 @@ function App() {
       setGeminiError("");
       setGeminiCorrelation(null);
       setGeminiCorrelationError("");
+      setExecutiveReport(null);
+      setTechnicalReport(null);
+      setGeminiReportError("");
       setRiskFilter("");
       setActiveFilters(EMPTY_FILTERS);
       setFilterDraft(EMPTY_FILTERS);
@@ -189,6 +206,9 @@ function App() {
       setGeminiError("");
       setGeminiCorrelation(null);
       setGeminiCorrelationError("");
+      setExecutiveReport(null);
+      setTechnicalReport(null);
+      setGeminiReportError("");
       setSection("dashboard");
       setNotice(`Análisis terminado: ${result.incident_count} incidentes y ${result.finding_count} hallazgos de reglas.`);
       await loadEvents(1, activeFilters);
@@ -242,7 +262,7 @@ function App() {
   }
 
   async function interpretSelectedIncident() {
-    if (!selectedIncident || !geminiStatus?.enabled) return;
+    if (!selectedIncident || !geminiStatus?.enabled || geminiBusy || geminiCorrelationBusy || geminiReportBusy) return;
     setGeminiBusy(true);
     setGeminiError("");
     setGeminiResult(null);
@@ -260,7 +280,7 @@ function App() {
   }
 
   async function suggestCorrelationWithGemini() {
-    if (!analysis || !geminiStatus?.enabled) return;
+    if (!analysis || !geminiStatus?.enabled || geminiBusy || geminiCorrelationBusy || geminiReportBusy) return;
     setGeminiCorrelationBusy(true);
     setGeminiCorrelationError("");
     try {
@@ -273,6 +293,26 @@ function App() {
     } finally {
       setGeminiCorrelationBusy(false);
     }
+  }
+
+  async function generateReport(reportType: "executive" | "technical") {
+    if (!analysis || !geminiStatus?.enabled || geminiBusy || geminiCorrelationBusy || geminiReportBusy) return;
+    setGeminiReportBusy(true);
+    setGeminiReportError("");
+    try {
+      const result = await apiRequest<GeminiAnalysisReport>(`/api/ai/reports/${reportType}`, { method: "POST" });
+      if (result.report_type === "executive") setExecutiveReport(result);
+      else setTechnicalReport(result);
+    } catch (caught) {
+      setGeminiReportError(caught instanceof Error ? caught.message : "No se pudo generar el informe con Gemini.");
+    } finally {
+      setGeminiReportBusy(false);
+    }
+  }
+
+  function printReport(target: "incident" | "executive" | "technical") {
+    setPrintTarget(target);
+    window.setTimeout(() => window.print(), 0);
   }
 
   function setFilter<K extends keyof EventFilters>(key: K, value: EventFilters[K]) {
@@ -307,10 +347,10 @@ function App() {
                 onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
               />
             </label>
-            <button className="button button-secondary" type="submit" disabled={!selectedFile || busy !== null || geminiBusy || geminiCorrelationBusy}>
+            <button className="button button-secondary" type="submit" disabled={!selectedFile || busy !== null || geminiBusy || geminiCorrelationBusy || geminiReportBusy}>
               {busy === "upload" ? "Cargando…" : "Cargar Excel"}
             </button>
-            <button className="button button-primary" type="button" onClick={analyzeWorkbook} disabled={!upload || busy !== null || geminiBusy || geminiCorrelationBusy}>
+            <button className="button button-primary" type="button" onClick={analyzeWorkbook} disabled={!upload || busy !== null || geminiBusy || geminiCorrelationBusy || geminiReportBusy}>
               {busy === "analysis" ? "Analizando…" : analysis ? "Volver a analizar" : "Analizar archivo"}
             </button>
           </form>
@@ -360,7 +400,7 @@ function App() {
                 <button
                   className={`nav-tab ${section === key ? "active" : ""}`}
                   key={key}
-                  disabled={geminiBusy || geminiCorrelationBusy}
+                  disabled={geminiBusy || geminiCorrelationBusy || geminiReportBusy}
                   onClick={() => setSection(key)}
                   type="button"
                 >
@@ -379,7 +419,15 @@ function App() {
                   geminiCorrelation={geminiCorrelation}
                   geminiCorrelationBusy={geminiCorrelationBusy}
                   geminiCorrelationError={geminiCorrelationError}
+                  executiveReport={executiveReport}
+                  technicalReport={technicalReport}
+                  geminiReportBusy={geminiReportBusy}
+                  geminiRequestBusy={geminiBusy || geminiCorrelationBusy || geminiReportBusy}
+                  geminiReportError={geminiReportError}
+                  geminiEnabled={Boolean(geminiStatus?.enabled && !geminiLoading)}
                   onSuggestCorrelation={() => void suggestCorrelationWithGemini()}
+                  onGenerateReport={(type) => void generateReport(type)}
+                  onPrintReport={(type) => printReport(type)}
                   onOpenIncidents={() => setSection("incidents")}
                 />
               )}
@@ -389,7 +437,7 @@ function App() {
                   <Panel
                     title="Incidentes detectados"
                     action={
-                      <select aria-label="Filtrar incidentes por criticidad" value={riskFilter} disabled={!analysis || geminiBusy || geminiCorrelationBusy} onChange={(event) => void loadIncidentsByRisk(event.target.value)}>
+                      <select aria-label="Filtrar incidentes por criticidad" value={riskFilter} disabled={!analysis || geminiBusy || geminiCorrelationBusy || geminiReportBusy} onChange={(event) => void loadIncidentsByRisk(event.target.value)}>
                         <option value="">Todas las criticidades</option>
                         <option value="Crítico">Crítico</option>
                         <option value="Alto">Alto</option>
@@ -405,7 +453,7 @@ function App() {
                         {incidentList.map((incident) => (
                           <button
                             className={`incident-row ${selectedIncident?.incident_id === incident.incident_id ? "selected" : ""}`}
-                            disabled={geminiBusy || geminiCorrelationBusy}
+                            disabled={geminiBusy || geminiCorrelationBusy || geminiReportBusy}
                             key={incident.incident_id}
                             onClick={() => void openIncident(incident.incident_id)}
                             type="button"
@@ -433,11 +481,11 @@ function App() {
                         incident={selectedIncident}
                         geminiStatus={geminiStatus}
                         geminiLoading={geminiLoading}
-                        geminiBusy={geminiBusy}
+                        geminiBusy={geminiBusy || geminiCorrelationBusy || geminiReportBusy}
                         geminiResult={geminiResult}
                         geminiError={geminiError}
                         onInterpret={() => void interpretSelectedIncident()}
-                        onPrintReport={() => window.print()}
+                        onPrintReport={() => printReport("incident")}
                       />
                     )}
                   </Panel>
@@ -470,8 +518,11 @@ function App() {
           incident={selectedIncident}
           sourceFilename={upload?.filename ?? "Archivo no disponible"}
           geminiResult={geminiResult?.incident_id === selectedIncident.incident_id ? geminiResult : null}
+          className={printTarget === "incident" ? "is-print-target" : ""}
         />
       )}
+      {executiveReport && <PrintableAnalysisReport report={executiveReport} sourceFilename={upload?.filename ?? "Archivo no disponible"} className={`print-report-executive ${printTarget === "executive" ? "is-print-target" : ""}`} />}
+      {technicalReport && <PrintableAnalysisReport report={technicalReport} sourceFilename={upload?.filename ?? "Archivo no disponible"} className={`print-report-technical ${printTarget === "technical" ? "is-print-target" : ""}`} />}
     </div>
   );
 }
@@ -484,7 +535,15 @@ function DashboardView({
   geminiCorrelation,
   geminiCorrelationBusy,
   geminiCorrelationError,
+  executiveReport,
+  technicalReport,
+  geminiReportBusy,
+  geminiRequestBusy,
+  geminiReportError,
+  geminiEnabled,
   onSuggestCorrelation,
+  onGenerateReport,
+  onPrintReport,
   onOpenIncidents,
 }: {
   dashboard: Dashboard | null;
@@ -494,7 +553,15 @@ function DashboardView({
   geminiCorrelation: GeminiCorrelation | null;
   geminiCorrelationBusy: boolean;
   geminiCorrelationError: string;
+  executiveReport: GeminiExecutiveReport | null;
+  technicalReport: GeminiTechnicalReport | null;
+  geminiReportBusy: boolean;
+  geminiRequestBusy: boolean;
+  geminiReportError: string;
+  geminiEnabled: boolean;
   onSuggestCorrelation: () => void;
+  onGenerateReport: (type: "executive" | "technical") => void;
+  onPrintReport: (type: "executive" | "technical") => void;
   onOpenIncidents: () => void;
 }) {
   if (!dashboard?.analysis_ready || !analysis) {
@@ -530,7 +597,7 @@ function DashboardView({
         action={
           <button
             className="button button-primary"
-            disabled={!geminiStatus?.enabled || geminiLoading || geminiCorrelationBusy}
+            disabled={!geminiStatus?.enabled || geminiLoading || geminiRequestBusy}
             onClick={onSuggestCorrelation}
             type="button"
           >
@@ -594,6 +661,22 @@ function DashboardView({
             </p>
           </div>
         )}
+      </Panel>
+
+      <Panel title="Informes IA · fase 6">
+        <p className="report-intro">Genera cada informe por separado y solo cuando lo solicites. Cada botón puede realizar una llamada a Gemini; los resultados se guardan en memoria por tipo y modelo. Se envían a Google los hallazgos y eventos relevantes. La IA no modifica la línea base determinista.</p>
+        {!geminiEnabled && <p className="muted-copy">Configura GEMINI_API_KEY en el backend para habilitar la generación de informes.</p>}
+        <div className="report-generation-actions">
+          <button className="button button-primary" disabled={!geminiEnabled || geminiRequestBusy} onClick={() => onGenerateReport("executive")} type="button">
+            {geminiReportBusy ? "Generando informe…" : executiveReport ? "Consultar informe ejecutivo guardado" : "Generar informe ejecutivo"}
+          </button>
+          <button className="button button-primary" disabled={!geminiEnabled || geminiRequestBusy} onClick={() => onGenerateReport("technical")} type="button">
+            {geminiReportBusy ? "Generando informe…" : technicalReport ? "Consultar informe técnico guardado" : "Generar informe técnico"}
+          </button>
+        </div>
+        {geminiReportError && <p className="gemini-error" role="alert">{geminiReportError}</p>}
+        {executiveReport && <ExecutiveReportView report={executiveReport} onPrint={() => onPrintReport("executive")} />}
+        {technicalReport && <TechnicalReportView report={technicalReport} analysis={analysis} onPrint={() => onPrintReport("technical")} />}
       </Panel>
 
       <div className="content-grid dashboard-grid">
@@ -661,6 +744,80 @@ function DashboardView({
           </div>
         </Panel>
       )}
+    </div>
+  );
+}
+
+function ExecutiveReportView({ report, onPrint }: { report: GeminiExecutiveReport; onPrint: () => void }) {
+  return (
+    <section className="ai-report-result" aria-label="Informe ejecutivo generado">
+      <div className="ai-report-heading">
+        <div><span className="detail-label">Informe ejecutivo · {report.model}</span><h3>Resumen para decisión</h3></div>
+        <button className="button button-secondary" onClick={onPrint} type="button">Imprimir / Guardar PDF</button>
+      </div>
+      <p className="gemini-cache-note">{report.cache_hit ? "Informe recuperado de memoria; no se hizo otra llamada." : "Informe guardado en memoria para este análisis y modelo."}</p>
+      <p>{report.summary}</p>
+      <h4>Puntos clave</h4>
+      {report.key_points.map((point) => (
+        <article className="ai-report-item" key={point.heading}>
+          <h4>{point.heading}</h4><p>{point.detail}</p>
+          <p className="report-citations"><strong>Hallazgos:</strong> {point.finding_ids.join(", ")} · <strong>Log_ID:</strong> {point.evidence_ids.join(", ")}</p>
+        </article>
+      ))}
+      <h4>Acciones recomendadas para analistas</h4>
+      {report.recommended_actions.length ? report.recommended_actions.map((item, index) => (
+        <article className="ai-report-item" key={`${index}-${item.action}`}>
+          <p><strong>{item.priority}:</strong> {item.action}</p>
+          <p className="report-citations"><strong>Hallazgos:</strong> {item.finding_ids.join(", ")} · <strong>Log_ID:</strong> {item.evidence_ids.join(", ")}</p>
+        </article>
+      )) : <p className="muted-copy">No se recomendaron acciones.</p>}
+      <BaselineSummary baseline={report.baseline} />
+      <p className="report-limitations"><strong>Limitaciones:</strong> {report.limitations}</p>
+      <p className="correlation-disclaimer">Contenido asesorativo, no confirmación de actividad maliciosa. Las recomendaciones son para revisión humana y no se ejecutan automáticamente.</p>
+    </section>
+  );
+}
+
+function TechnicalReportView({ report, analysis, onPrint }: { report: GeminiTechnicalReport; analysis: AnalysisResult; onPrint: () => void }) {
+  return (
+    <section className="ai-report-result" aria-label="Informe técnico generado">
+      <div className="ai-report-heading">
+        <div><span className="detail-label">Informe técnico · {report.model}</span><h3>Detalle por incidente</h3></div>
+        <button className="button button-secondary" onClick={onPrint} type="button">Imprimir / Guardar PDF</button>
+      </div>
+      <p className="gemini-cache-note">{report.cache_hit ? "Informe recuperado de memoria; no se hizo otra llamada." : "Informe guardado en memoria para este análisis y modelo."}</p>
+      <p>{report.summary}</p>
+      {report.incident_details.map((detail) => {
+        const incident = analysis.incidents.find((item) => item.incident_id === detail.incident_id);
+        return (
+          <article className="ai-report-item" key={detail.incident_id}>
+            <h4>{detail.incident_id} · {incident?.title ?? "Incidente"}</h4>
+            <p><strong>Línea base determinista:</strong> {incident ? `${incident.risk.level}, puntaje ${incident.risk.score}` : "No disponible"}</p>
+            <p>{detail.technical_summary}</p>
+            <p className="report-citations"><strong>Hallazgos:</strong> {detail.finding_ids.join(", ")} · <strong>Técnicas base:</strong> {detail.technique_ids.join(", ") || "ninguna"} · <strong>Log_ID:</strong> {detail.evidence_ids.join(", ")}</p>
+          </article>
+        );
+      })}
+      <h4>Hallazgos informativos (no son incidentes)</h4>
+      {report.informational_findings.length ? report.informational_findings.map((item) => (
+        <article className="ai-report-item" key={item.finding_id}>
+          <h4>{item.finding_id} · {analysis.findings.find((finding) => finding.finding_id === item.finding_id)?.name}</h4>
+          <p>{item.summary}</p><p className="report-citations"><strong>Log_ID:</strong> {item.evidence_ids.join(", ")}</p>
+        </article>
+      )) : <p className="muted-copy">No hay hallazgos informativos en este análisis.</p>}
+      <BaselineSummary baseline={report.baseline} />
+      <p className="report-limitations"><strong>Limitaciones:</strong> {report.limitations}</p>
+      <p className="correlation-disclaimer">Informe asesorativo. Los incidentes, técnicas y riesgos deterministas se conservan como línea base y no son modificados por Gemini.</p>
+    </section>
+  );
+}
+
+function BaselineSummary({ baseline }: { baseline: GeminiExecutiveReport["baseline"] }) {
+  return (
+    <div className="report-baseline">
+      <strong>Línea base determinista (no modificada por IA):</strong>
+      <span>{baseline.event_count} eventos · {baseline.finding_count} hallazgos · {baseline.incident_count} incidentes</span>
+      <span>{baseline.risk_by_incident.map((item) => `${item.incident_id}: ${item.level ?? "Sin nivel"} (${item.score ?? "—"})`).join(" · ") || "Sin riesgos por incidente"}</span>
     </div>
   );
 }
@@ -924,20 +1081,73 @@ function IncidentDetail({
   );
 }
 
+function PrintableAnalysisReport({ report, sourceFilename, className }: {
+  report: GeminiAnalysisReport;
+  sourceFilename: string;
+  className: string;
+}) {
+  const generatedAt = new Date().toLocaleString("es-ES");
+  return (
+    <article className={`print-report print-analysis-report ${className}`}>
+      <header className="print-report-header">
+        <p className="print-eyebrow">SOC L2 · {report.report_type === "executive" ? "INFORME EJECUTIVO" : "INFORME TÉCNICO"} · ASISTIDO POR IA</p>
+        <h1>{report.report_type === "executive" ? "Resumen ejecutivo de seguridad" : "Informe técnico de análisis"}</h1>
+        <div className="print-report-meta"><span><strong>Generado:</strong> {generatedAt}</span><span><strong>Fuente:</strong> {sourceFilename}</span><span><strong>Modelo:</strong> {report.model}</span></div>
+      </header>
+      <section className="print-report-section">
+        <h2>Resumen</h2><p>{report.summary}</p>
+      </section>
+      <section className="print-report-section">
+        <h2>Línea base determinista</h2>
+        <p>{report.baseline.event_count} eventos · {report.baseline.finding_count} hallazgos · {report.baseline.incident_count} incidentes.</p>
+        {report.baseline.risk_by_incident.map((item) => <p key={item.incident_id}><strong>{item.incident_id}:</strong> {item.level ?? "Sin nivel"} · puntaje {item.score ?? "—"}</p>)}
+        <p className="print-disclaimer">Esta línea base procede del análisis local y Gemini no puede cambiar incidentes, hallazgos ni riesgo.</p>
+      </section>
+      {report.report_type === "executive" ? (
+        <>
+          <section className="print-report-section">
+            <h2>Puntos clave</h2>
+            {report.key_points.map((point) => <article className="print-finding" key={point.heading}><h3>{point.heading}</h3><p>{point.detail}</p><p><strong>Hallazgos:</strong> {point.finding_ids.join(", ")}</p><p><strong>Evidencia Log_ID:</strong> {point.evidence_ids.join(", ")}</p></article>)}
+          </section>
+          <section className="print-report-section">
+            <h2>Acciones recomendadas para analistas</h2>
+            {report.recommended_actions.length ? report.recommended_actions.map((item, index) => <article className="print-finding" key={`${index}-${item.action}`}><p><strong>{item.priority}:</strong> {item.action}</p><p><strong>Hallazgos:</strong> {item.finding_ids.join(", ")} · <strong>Log_ID:</strong> {item.evidence_ids.join(", ")}</p></article>) : <p>No se recomendaron acciones.</p>}
+          </section>
+        </>
+      ) : (
+        <>
+          <section className="print-report-section">
+            <h2>Detalle técnico por incidente</h2>
+            {report.incident_details.map((detail) => <article className="print-finding" key={detail.incident_id}><h3>{detail.incident_id}</h3><p>{detail.technical_summary}</p><p><strong>Hallazgos:</strong> {detail.finding_ids.join(", ")}</p><p><strong>Técnicas ATT&CK de la línea base:</strong> {detail.technique_ids.join(", ") || "ninguna"}</p><p><strong>Evidencia Log_ID:</strong> {detail.evidence_ids.join(", ")}</p></article>)}
+          </section>
+          <section className="print-report-section">
+            <h2>Hallazgos informativos · no son incidentes</h2>
+            {report.informational_findings.length ? report.informational_findings.map((item) => <article className="print-finding" key={item.finding_id}><h3>{item.finding_id}</h3><p>{item.summary}</p><p><strong>Evidencia Log_ID:</strong> {item.evidence_ids.join(", ")}</p></article>) : <p>No hay hallazgos informativos.</p>}
+          </section>
+        </>
+      )}
+      <section className="print-report-section"><h2>Limitaciones</h2><p>{report.limitations}</p></section>
+      <footer className="print-report-footer">Informe asesorativo generado con Gemini. Verifica las conclusiones y las citas antes de tomar medidas; no confirma por sí solo actividad maliciosa ni ejecuta recomendaciones.</footer>
+    </article>
+  );
+}
+
 function PrintableIncidentReport({
   incident,
   sourceFilename,
   geminiResult,
+  className,
 }: {
   incident: Incident;
   sourceFilename: string;
   geminiResult: GeminiInterpretation | null;
+  className: string;
 }) {
   const generatedAt = new Date().toLocaleString("es-ES");
   const citedEvents = new Map(incident.events.map((event) => [event.Log_ID, event]));
 
   return (
-    <article className="print-report">
+    <article className={`print-report print-report-incident ${className}`}>
       <header className="print-report-header">
         <p className="print-eyebrow">SOC L2 · INFORME DE INCIDENTE</p>
         <h1>{incident.title}</h1>

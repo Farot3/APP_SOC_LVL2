@@ -11,6 +11,7 @@ from .gemini import (
     GeminiAPIError,
     GeminiConfigurationError,
     gemini_status,
+    generate_analysis_report,
     interpret_incident,
     suggest_finding_correlation,
 )
@@ -28,6 +29,7 @@ app.state.hypotheses = []
 app.state.analysis_ready = False
 app.state.gemini_interpretations = {}
 app.state.gemini_correlations = {}
+app.state.gemini_reports = {}
 
 
 @app.get("/api/health")
@@ -56,6 +58,7 @@ def upload_workbook(file: Annotated[UploadFile, File()]) -> dict[str, Any]:
     app.state.analysis_ready = False
     app.state.gemini_interpretations = {}
     app.state.gemini_correlations = {}
+    app.state.gemini_reports = {}
     return {
         "filename": filename,
         "event_count": len(events),
@@ -78,6 +81,7 @@ def analyze_events() -> dict[str, Any]:
     app.state.hypotheses = correlation["hypotheses"]
     app.state.gemini_interpretations = {}
     app.state.gemini_correlations = {}
+    app.state.gemini_reports = {}
     app.state.analysis_ready = True
     return {
         "event_count": len(app.state.events),
@@ -170,6 +174,35 @@ def correlate_findings_with_gemini() -> dict[str, Any]:
 
     result["cache_hit"] = False
     app.state.gemini_correlations["analysis"] = result
+    return result
+
+
+@app.post("/api/ai/reports/{report_type}")
+def generate_report_with_gemini(report_type: str) -> dict[str, Any]:
+    if not app.state.analysis_ready:
+        raise HTTPException(status_code=409, detail="Ejecute /api/analyze antes de generar un informe.")
+    if report_type not in {"executive", "technical"}:
+        raise HTTPException(status_code=404, detail="Tipo de informe no encontrado.")
+
+    model = gemini_status()["model"]
+    cached_result = app.state.gemini_reports.get(report_type)
+    if cached_result and cached_result.get("model") == model:
+        return {**cached_result, "cache_hit": True}
+
+    try:
+        result = generate_analysis_report(
+            report_type,
+            app.state.findings,
+            app.state.incidents,
+            app.state.events,
+        )
+    except GeminiConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except GeminiAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    result["cache_hit"] = False
+    app.state.gemini_reports[report_type] = result
     return result
 
 

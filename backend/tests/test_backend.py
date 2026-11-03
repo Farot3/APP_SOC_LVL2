@@ -943,3 +943,175 @@ def test_gemini_correlation_rejects_duplicate_input_ids_before_network_call(
     assert response.status_code == 409
     assert "finding_id duplicados" in response.json()["detail"]
     assert calls == []
+
+
+def _analysis_report_fixture() -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    findings, events, _ = _correlation_fixture()
+    incidents = [{
+        "incident_id": "I-01",
+        "title": "Intentos y acceso exitoso",
+        "finding_ids": ["F-01", "F-02"],
+        "technique_ids": ["T1110", "T1078"],
+        "rule_ids": ["R01", "R02"],
+        "risk": {"level": "Alto", "score": 16},
+    }]
+    return findings, events, incidents
+
+
+def _valid_executive_report() -> dict[str, Any]:
+    return {
+        "summary": "Se observó una secuencia de fallos y acceso posterior.",
+        "key_points": [{
+            "heading": "Acceso tras fallos",
+            "detail": "Los registros muestran fallos y un acceso exitoso posterior.",
+            "finding_ids": ["F-01", "F-02"],
+            "evidence_ids": ["LOG-001", "LOG-002"],
+        }],
+        "recommended_actions": [{
+            "priority": "Alta",
+            "action": "Validar con el propietario de la cuenta si el acceso fue autorizado.",
+            "finding_ids": ["F-02"],
+            "evidence_ids": ["LOG-002"],
+        }],
+        "limitations": "Los registros no permiten confirmar la identidad del operador.",
+    }
+
+
+def _valid_technical_report() -> dict[str, Any]:
+    return {
+        "summary": "El análisis determinista contiene un incidente y un hallazgo informativo.",
+        "incident_details": [{
+            "incident_id": "I-01",
+            "technical_summary": "Los fallos preceden al acceso exitoso.",
+            "finding_ids": ["F-01", "F-02"],
+            "technique_ids": ["T1110", "T1078"],
+            "evidence_ids": ["LOG-001", "LOG-002"],
+        }],
+        "informational_findings": [{
+            "finding_id": "F-03",
+            "summary": "Hallazgo informativo independiente.",
+            "evidence_ids": ["LOG-003"],
+        }],
+        "limitations": "No se conoce el contexto operativo del usuario.",
+    }
+
+
+def test_ai_reports_are_on_demand_cached_per_type_and_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.6-flash")
+    findings, events, incidents = _analysis_report_fixture()
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "findings", findings)
+    monkeypatch.setattr(app.state, "events", events)
+    monkeypatch.setattr(app.state, "incidents", incidents)
+    monkeypatch.setattr(app.state, "gemini_reports", {})
+    outputs = {"executive": _valid_executive_report(), "technical": _valid_technical_report()}
+    requests: list[dict[str, Any]] = []
+
+    def fake_post(*args: object, **kwargs: Any) -> httpx.Response:
+        requests.append(kwargs["json"])
+        prompt = kwargs["json"]["input"]
+        report_type = "technical" if "informe técnico SOC" in prompt else "executive"
+        return httpx.Response(200, json={"output_text": json.dumps(outputs[report_type])})
+
+    monkeypatch.setattr(gemini.httpx, "post", fake_post)
+
+    executive = client.post("/api/ai/reports/executive")
+    executive_cached = client.post("/api/ai/reports/executive")
+    technical = client.post("/api/ai/reports/technical")
+
+    assert executive.status_code == 200
+    assert executive.json()["report_type"] == "executive"
+    assert executive.json()["baseline"]["incident_count"] == 1
+    assert executive.json()["baseline"]["risk_by_incident"] == [{"incident_id": "I-01", "level": "Alto", "score": 16}]
+    assert executive_cached.json()["cache_hit"] is True
+    assert technical.status_code == 200
+    assert technical.json()["informational_findings"][0]["finding_id"] == "F-03"
+    assert len(requests) == 2
+
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.8-flash")
+    changed_model = client.post("/api/ai/reports/executive")
+    assert changed_model.status_code == 200
+    assert changed_model.json()["model"] == "gemini-3.8-flash"
+    assert changed_model.json()["cache_hit"] is False
+    assert len(requests) == 3
+
+
+def test_ai_report_endpoint_rejects_unsupported_report_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    findings, events, incidents = _analysis_report_fixture()
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "findings", findings)
+    monkeypatch.setattr(app.state, "events", events)
+    monkeypatch.setattr(app.state, "incidents", incidents)
+
+    response = client.post("/api/ai/reports/unsupported")
+
+    assert response.status_code == 404
+    assert "Tipo de informe" in response.json()["detail"]
+
+
+def test_ai_report_rejects_unverified_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    findings, events, incidents = _analysis_report_fixture()
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "findings", findings)
+    monkeypatch.setattr(app.state, "events", events)
+    monkeypatch.setattr(app.state, "incidents", incidents)
+    monkeypatch.setattr(app.state, "gemini_reports", {})
+    invalid_output = _valid_executive_report()
+    invalid_output["key_points"][0]["evidence_ids"] = ["LOG-003"]
+    monkeypatch.setattr(
+        gemini.httpx,
+        "post",
+        lambda *args, **kwargs: httpx.Response(200, json={"output_text": json.dumps(invalid_output)}),
+    )
+
+    response = client.post("/api/ai/reports/executive")
+
+    assert response.status_code == 502
+    assert "evidencia ajena" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("techniques", [["T9999"], ["T1110"]])
+def test_ai_technical_report_rejects_incomplete_or_unrelated_techniques(
+    monkeypatch: pytest.MonkeyPatch,
+    techniques: list[str],
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    findings, events, incidents = _analysis_report_fixture()
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "findings", findings)
+    monkeypatch.setattr(app.state, "events", events)
+    monkeypatch.setattr(app.state, "incidents", incidents)
+    monkeypatch.setattr(app.state, "gemini_reports", {})
+    invalid_output = _valid_technical_report()
+    invalid_output["incident_details"][0]["technique_ids"] = techniques
+    monkeypatch.setattr(
+        gemini.httpx,
+        "post",
+        lambda *args, **kwargs: httpx.Response(200, json={"output_text": json.dumps(invalid_output)}),
+    )
+
+    response = client.post("/api/ai/reports/technical")
+
+    assert response.status_code == 502
+    assert "técnicas" in response.json()["detail"]
+
+
+def test_ai_report_rejects_ambiguous_baseline_before_network_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    findings, events, incidents = _analysis_report_fixture()
+    findings.append(dict(findings[0]))
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "findings", findings)
+    monkeypatch.setattr(app.state, "events", events)
+    monkeypatch.setattr(app.state, "incidents", incidents)
+    monkeypatch.setattr(app.state, "gemini_reports", {})
+    calls: list[bool] = []
+    monkeypatch.setattr(gemini.httpx, "post", lambda *args, **kwargs: calls.append(True))
+
+    response = client.post("/api/ai/reports/executive")
+
+    assert response.status_code == 409
+    assert "finding_id duplicados" in response.json()["detail"]
+    assert calls == []

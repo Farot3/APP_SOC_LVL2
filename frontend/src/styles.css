@@ -238,6 +238,18 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .welcome-state { margin-top: 30px; }
 .page-footer { margin: 27px 0 0; padding: 13px 0 18px; display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); color: #8a959c; font-size: 10px; }
 .report-actions { margin: 10px 0; display: flex; justify-content: flex-end; }
+.report-intro { max-width: 850px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.report-generation-actions { display: flex; flex-wrap: wrap; gap: 9px; margin: 12px 0 18px; }
+.ai-report-result { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.ai-report-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ai-report-heading h3 { margin: 3px 0 0; font-size: 16px; }
+.ai-report-result > h4 { margin: 16px 0 8px; font-size: 13px; }
+.ai-report-item { margin: 8px 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfc; }
+.ai-report-item h4 { margin: 0 0 6px; font-size: 12px; }
+.ai-report-item p { margin: 5px 0; font-size: 12px; line-height: 1.55; }
+.report-citations { color: var(--muted); font-size: 10px !important; overflow-wrap: anywhere; }
+.report-baseline { margin-top: 12px; padding: 10px 12px; display: grid; gap: 4px; border-left: 3px solid var(--accent); background: #f1f7f5; font-size: 11px; }
+.report-limitations { padding: 9px 11px; border: 1px solid #eadbb8; border-radius: 7px; background: #fffbf1; font-size: 11px; line-height: 1.55; }
 .print-report { display: none; }
 
 @media (max-width: 900px) {
@@ -254,7 +266,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
   body { min-width: 0; background: #fff !important; }
   .app-shell { min-height: 0; }
   .app-shell > :not(.print-report) { display: none !important; }
-  .print-report { display: block !important; width: 100%; color: #17212b; font: 10pt/1.45 "Segoe UI", sans-serif; }
+  .print-report { display: none !important; width: 100%; color: #17212b; font: 10pt/1.45 "Segoe UI", sans-serif; }
+  .print-report.is-print-target { display: block !important; }
   .print-report-header { padding-bottom: 12px; border-bottom: 2px solid #147d78; }
   .print-eyebrow { margin: 0 0 5px; color: #0e625e; font-size: 9pt; font-weight: 700; letter-spacing: .1em; }
   .print-report-header h1 { margin: 0 0 10px; font-size: 19pt; }
