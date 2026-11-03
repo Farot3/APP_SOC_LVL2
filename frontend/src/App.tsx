@@ -646,6 +646,9 @@ function IncidentDetail({
   onPrintReport: () => void;
 }) {
   const citedEvents = new Map(incident.events.map((event) => [event.Log_ID, event]));
+  const citedLogIds = new Set(
+    geminiResult?.incident_id === incident.incident_id ? geminiResult.evidence_ids : [],
+  );
   return (
     <div className="incident-detail">
       <div className="detail-title-row"><h3>{incident.title}</h3><RiskBadge level={incident.risk.level} /></div>
@@ -703,6 +706,28 @@ function IncidentDetail({
               <strong>Conclusión: {geminiResult.conclusion.replace("_", " ")}</strong>
               <span>{geminiResult.model}</span>
             </div>
+            <div className="gemini-finding-classifications">
+              <span className="detail-label">Clasificación IA por hallazgo</span>
+              <p className="muted-copy">Evaluación asistida por IA; no reemplaza el riesgo determinista del incidente ({incident.risk.level}, puntaje {incident.risk.score}).</p>
+              {geminiResult.clasificaciones_hallazgos.length ? (
+                <div className="gemini-finding-list">
+                  {geminiResult.clasificaciones_hallazgos.map((classification) => {
+                    const finding = incident.findings.find((item) => item.finding_id === classification.finding_id);
+                    return (
+                      <article className="gemini-finding-item" key={classification.finding_id}>
+                        <div className="gemini-finding-heading">
+                          <strong>{classification.finding_id}{finding ? ` · ${finding.name}` : ""}</strong>
+                          <RiskBadge level={classification.riesgo} />
+                        </div>
+                        <p>{classification.justificacion}</p>
+                        <span className="muted-copy">Confianza IA: {classification.confianza}/5 · Técnicas MITRE sugeridas: {classification.tecnica_mitre.join(", ") || "ninguna"}</span>
+                        <span className="muted-copy">Evidencia: {classification.evidence_ids.map((id) => `${id}${citedEvents.get(id) ? ` · ${citedEvents.get(id)?.Event_Description}` : ""}`).join("; ")}</span>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : <p className="muted-copy">Este incidente no contiene hallazgos para clasificar.</p>}
+            </div>
             <p><strong>Explicación:</strong> {geminiResult.explicacion}</p>
             <p><strong>Limitación:</strong> {geminiResult.limitacion}</p>
             <div>
@@ -735,22 +760,46 @@ function IncidentDetail({
               ) : <p className="muted-copy">No se identificaron IP de origen pertinentes en estos eventos.</p>}
               <p className="gemini-origin-caveat">Basado solo en los registros del incidente; no consulta reputación, geolocalización ni titularidad de las IP.</p>
             </div>
+            <div className="gemini-recommendations">
+              <span className="detail-label">Comprobaciones sugeridas para el analista</span>
+              {geminiResult.comprobaciones_recomendadas.length ? (
+                <ol>
+                  {geminiResult.comprobaciones_recomendadas.map((item, index) => (
+                    <li key={`${index}-${item.comprobacion}`}>
+                      <p>{item.comprobacion}</p>
+                      <span className="muted-copy">
+                        Evidencia: {item.evidence_ids.map((id) => `${id}${citedEvents.get(id) ? ` · ${citedEvents.get(id)?.Event_Description}` : ""}`).join("; ")}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              ) : <p className="muted-copy">No se sugirieron comprobaciones adicionales.</p>}
+              <p className="gemini-origin-caveat">Son pasos de investigación para una persona; no se ejecutan automáticamente.</p>
+            </div>
           </div>
         )}
       </section>
       <div className="detail-block">
         <span className="detail-label">Cronología y evidencia · {incident.events.length} eventos</span>
         <div className="timeline-list">
-          {incident.events.map((event) => (
-            <article className="timeline-item" key={event.Log_ID}>
-              <span className="timeline-dot" />
-              <div className="timeline-content">
-                <div className="timeline-meta"><time>{displayTime(event.Timestamp)}</time><code>{event.Log_ID}</code><span>{event.Hostname}</span></div>
-                <strong>{event.Event_Description}</strong>
-                {event.Process_CommandLine && <code className="command-line">{event.Process_CommandLine}</code>}
-              </div>
-            </article>
-          ))}
+          {incident.events.map((event) => {
+            const isAiCited = citedLogIds.has(event.Log_ID);
+            return (
+              <article className={`timeline-item ${isAiCited ? "timeline-item-ai-cited" : ""}`} key={event.Log_ID}>
+                <span className="timeline-dot" />
+                <div className="timeline-content">
+                  <div className="timeline-meta">
+                    <time>{displayTime(event.Timestamp)}</time>
+                    <code>{event.Log_ID}</code>
+                    {isAiCited && <span className="ai-evidence-badge">Citada por Gemini</span>}
+                    <span>{event.Hostname}</span>
+                  </div>
+                  <strong>{event.Event_Description}</strong>
+                  {event.Process_CommandLine && <code className="command-line">{event.Process_CommandLine}</code>}
+                </div>
+              </article>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -823,6 +872,19 @@ function PrintableIncidentReport({
           <>
             <p><strong>Modelo:</strong> {geminiResult.model}</p>
             <p><strong>Conclusión:</strong> {geminiResult.conclusion.replace("_", " ")}</p>
+            <p><strong>Línea base determinista:</strong> riesgo {incident.risk.level}, puntaje {incident.risk.score}. La clasificación IA siguiente es complementaria y no la modifica.</p>
+            <h3>Clasificación IA por hallazgo</h3>
+            {geminiResult.clasificaciones_hallazgos.length ? geminiResult.clasificaciones_hallazgos.map((classification) => {
+              const finding = incident.findings.find((item) => item.finding_id === classification.finding_id);
+              return (
+                <article className="print-finding" key={classification.finding_id}>
+                  <h3>{classification.finding_id}{finding ? ` · ${finding.name}` : ""} · Riesgo IA: {classification.riesgo}</h3>
+                  <p>{classification.justificacion}</p>
+                  <p><strong>Confianza IA:</strong> {classification.confianza}/5 · <strong>Técnicas MITRE:</strong> {classification.tecnica_mitre.join(", ") || "ninguna"}</p>
+                  <p className="print-muted">Evidencia: {classification.evidence_ids.map((id) => `${id}${citedEvents.get(id) ? ` · ${citedEvents.get(id)?.Event_Description}` : ""}`).join("; ")}</p>
+                </article>
+              );
+            }) : <p>Este incidente no contiene hallazgos para clasificar.</p>}
             <h3>Análisis de IP de origen</h3>
             {geminiResult.origenes.length ? geminiResult.origenes.map((origin) => (
               <article className="print-origin" key={origin.ip}>
@@ -831,6 +893,14 @@ function PrintableIncidentReport({
               </article>
             )) : <p>No se identificaron IP de origen pertinentes en los eventos.</p>}
             <p className="print-muted">El análisis usa solo los registros del incidente; no consulta reputación, geolocalización ni titularidad de las IP.</p>
+            <h3>Comprobaciones sugeridas para el analista</h3>
+            {geminiResult.comprobaciones_recomendadas.length ? geminiResult.comprobaciones_recomendadas.map((item, index) => (
+              <article className="print-origin" key={`${index}-${item.comprobacion}`}>
+                <p>{item.comprobacion}</p>
+                <p className="print-muted">Evidencia: {item.evidence_ids.map((id) => `${id}${citedEvents.get(id) ? ` · ${citedEvents.get(id)?.Event_Description}` : ""}`).join("; ")}</p>
+              </article>
+            )) : <p>No se sugirieron comprobaciones adicionales.</p>}
+            <p className="print-muted">Son pasos de investigación para una persona; no se ejecutan automáticamente.</p>
             <p><strong>Explicación:</strong> {geminiResult.explicacion}</p>
             <p><strong>Limitación:</strong> {geminiResult.limitacion}</p>
             <p><strong>Log_ID citados:</strong> {geminiResult.evidence_ids.length
@@ -847,21 +917,25 @@ function PrintableIncidentReport({
 
       <section className="print-report-section print-timeline">
         <h2>Cronología completa · {incident.events.length} eventos</h2>
-        {incident.events.map((event) => (
-          <article className="print-event" key={event.Log_ID}>
-            <div className="print-event-meta">
-              <time>{displayTime(event.Timestamp)}</time>
-              <code>{event.Log_ID}</code>
-              <span>{event.Hostname || "Host no indicado"}</span>
-              <span>Event_ID {event.Event_ID}</span>
-            </div>
-            <p><strong>{event.Event_Description}</strong></p>
-            <p className="print-muted">
-              Usuario: {event.User || "—"} · Origen: {event.Source_IP || "—"} · Destino: {event.Destination || "—"} · Resultado: {event.Result}
-            </p>
-            {event.Process_CommandLine && <code className="print-command">{event.Process_CommandLine}</code>}
-          </article>
-        ))}
+        {incident.events.map((event) => {
+          const isAiCited = geminiResult?.evidence_ids.includes(event.Log_ID) ?? false;
+          return (
+            <article className={`print-event ${isAiCited ? "print-event-ai-cited" : ""}`} key={event.Log_ID}>
+              <div className="print-event-meta">
+                <time>{displayTime(event.Timestamp)}</time>
+                <code>{event.Log_ID}</code>
+                {isAiCited && <strong className="print-cited-marker">Citado por Gemini</strong>}
+                <span>{event.Hostname || "Host no indicado"}</span>
+                <span>Event_ID {event.Event_ID}</span>
+              </div>
+              <p><strong>{event.Event_Description}</strong></p>
+              <p className="print-muted">
+                Usuario: {event.User || "—"} · Origen: {event.Source_IP || "—"} · Destino: {event.Destination || "—"} · Resultado: {event.Result}
+              </p>
+              {event.Process_CommandLine && <code className="print-command">{event.Process_CommandLine}</code>}
+            </article>
+          );
+        })}
       </section>
 
       <footer className="print-report-footer">

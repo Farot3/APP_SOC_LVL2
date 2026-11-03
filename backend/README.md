@@ -32,14 +32,10 @@ Para revisar también el estilo del backend:
 Desde `backend/`:
 
 ```powershell
-pwsh
-
-$secureKey = Read-Host "API key de Gemini" -AsSecureString
-$env:GEMINI_API_KEY = ConvertFrom-SecureString $secureKey -AsPlainText
-$env:GEMINI_MODEL = "gemini-3.6-flash"
-
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
+
+La configuración opcional de Gemini se explica en la sección **Interpretación optativa con Gemini**.
 
 Rutas disponibles en esta fase:
 
@@ -50,7 +46,7 @@ Rutas disponibles en esta fase:
 - `GET /api/incidents` — lista filtrable por `risk_level`, `rule_id`, `user` y `host`
 - `GET /api/incidents/{incident_id}` — detalle, cronología y evidencia
 - `GET /api/ai/status` — indica si la interpretación optativa con Gemini está configurada
-- `POST /api/incidents/{incident_id}/interpret` — interpreta solo ese incidente con Gemini y valida sus `Log_ID`
+- `POST /api/incidents/{incident_id}/interpret` — interpreta solo ese incidente con Gemini, clasifica todos sus hallazgos en la misma llamada y valida hallazgos, técnicas y `Log_ID`
 - `GET /api/dashboard` — métricas de eventos, reglas, incidentes, tácticas y matriz de riesgo
 
 La carga, los hallazgos y los incidentes quedan en memoria. Los vínculos débiles se devuelven como hipótesis y no se usan para unir incidentes. Las rutas dependientes del análisis responden `409` si todavía no se ha cargado o analizado el Excel.
@@ -82,10 +78,12 @@ finally {
   [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
 }
 $secureKey.Dispose()
-$env:GEMINI_MODEL = "gemini-3.6-flash"
+$env:GEMINI_MODEL = "gemini-3.8-flash"
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
 Si ya estaba ejecutándose, detén Uvicorn con `Ctrl+C` y reinícialo después de configurar las variables. La clave no debe guardarse en el frontend ni en Git. Sin ella, `/api/ai/status` informa que Gemini está deshabilitado.
 
-La petición contiene solo los hallazgos y eventos del incidente seleccionado, no el libro completo. Las interpretaciones exitosas se guardan en memoria por incidente y modelo; volver a consultar el resultado no consume otra llamada. La caché se borra al cargar otro Excel, volver a analizar o reiniciar el backend. Gemini devuelve JSON estructurado con explicación y análisis de IP de origen. El backend valida que cada IP exista en `Source_IP` de los eventos y que sus citas sean `Log_ID` del incidente con esa misma IP. No consulta reputación ni geolocalización. Al activar la función, esos datos se envían a Google; no remitas información sensible sin autorización y consulta las condiciones de privacidad y tratamiento de datos aplicables a tu plan.
+La petición contiene solo los hallazgos y eventos del incidente seleccionado, no el libro completo. Las interpretaciones exitosas se guardan en memoria por incidente y modelo; volver a consultar el resultado no consume otra llamada. La caché se borra al cargar otro Excel, volver a analizar o reiniciar el backend. Gemini devuelve JSON estructurado con clasificación por hallazgo, explicación, análisis de IP de origen y comprobaciones sugeridas para un analista humano. El backend valida que la respuesta cubra exactamente los hallazgos del incidente, que las técnicas y citas pertenezcan a cada hallazgo, que cada IP exista en `Source_IP` de los eventos y que las recomendaciones citen `Log_ID` del incidente. Las clasificaciones IA no sustituyen el riesgo determinista. No consulta reputación ni geolocalización y no ejecuta acciones sugeridas.
+
+La clasificación de hallazgos se incluye en la misma llamada por incidente para limitar el consumo de cuota. El nuevo esquema aún requiere una prueba manual con el modelo configurado; las pruebas automatizadas usan mocks y no hacen llamadas a Google. El estado de fases y próximos pasos está en `../docs/ROADMAP.md`. Al activar la función, esos datos se envían a Google; no remitas información sensible sin autorización y consulta las condiciones de privacidad y tratamiento de datos aplicables a tu plan.

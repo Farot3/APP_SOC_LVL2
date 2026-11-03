@@ -1,6 +1,7 @@
 import json
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -338,7 +339,7 @@ def test_correlation_groups_six_incidents_and_keeps_subnet_links_as_hypotheses()
     }
 
 
-def _stub_incident() -> dict[str, object]:
+def _stub_incident() -> dict[str, Any]:
     return {
         "incident_id": "I-TEST",
         "title": "Incidente de prueba",
@@ -404,6 +405,7 @@ def test_interpret_endpoint_returns_structured_result_with_valid_evidence(monkey
     assert response.json()["conclusion"] == "sospechoso"
     assert response.json()["evidence_ids"] == ["LOG-001"]
     assert response.json()["origenes"][0]["ip"] == "203.0.113.10"
+    assert response.json()["comprobaciones_recomendadas"][0]["evidence_ids"] == ["LOG-001"]
     assert response.json()["model"] == "gemini-3.6-flash"
     assert response.json()["cache_hit"] is False
 
@@ -499,6 +501,40 @@ def test_interpret_endpoint_rejects_evidence_from_a_different_source_ip(
     assert "no respalda la IP" in response.json()["detail"]
 
 
+def test_interpret_endpoint_rejects_unverified_recommended_check_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "incidents", [_stub_incident()])
+    monkeypatch.setattr(app.state, "gemini_interpretations", {})
+    model_result = {
+        "conclusion": "sospechoso",
+        "evidence_ids": ["LOG-001"],
+        "origenes": [{
+            "ip": "203.0.113.10",
+            "analisis": "La IP aparece como origen.",
+            "evidence_ids": ["LOG-001"],
+        }],
+        "comprobaciones_recomendadas": [{
+            "comprobacion": "Revisar el inicio de sesión.",
+            "evidence_ids": ["LOG-999"],
+        }],
+        "explicacion": "Los datos merecen revisión.",
+        "limitacion": "Datos de prueba.",
+    }
+    monkeypatch.setattr(
+        gemini.httpx,
+        "post",
+        lambda *args, **kwargs: httpx.Response(200, json={"output_text": json.dumps(model_result)}),
+    )
+
+    response = client.post("/api/incidents/I-TEST/interpret")
+
+    assert response.status_code == 502
+    assert "Log_ID" in response.json()["detail"]
+
+
 def test_interpret_endpoint_reuses_cached_result_and_invalidates_on_model_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -546,3 +582,112 @@ def test_interpret_endpoint_reuses_cached_result_and_invalidates_on_model_change
     assert third.json()["model"] == "gemini-3.8-flash"
     assert third.json()["cache_hit"] is False
     assert len(calls) == 2
+
+
+def _incident_with_finding() -> dict[str, Any]:
+    incident = _stub_incident()
+    incident["findings"] = [{
+        "finding_id": "F-TEST-01",
+        "rule_id": "R01",
+        "name": "Intentos de autenticación fallidos",
+        "explanation": "Varios intentos fallidos desde una IP.",
+        "technique_ids": ["T1110"],
+        "event_ids": ["LOG-001"],
+        "entities": {"source_ips": ["203.0.113.10"]},
+    }]
+    return incident
+
+
+def _classification_response(classifications: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "conclusion": "sospechoso",
+        "evidence_ids": ["LOG-001"],
+        "clasificaciones_hallazgos": classifications,
+        "origenes": [{
+            "ip": "203.0.113.10",
+            "analisis": "La IP aparece como origen del evento.",
+            "evidence_ids": ["LOG-001"],
+        }],
+        "comprobaciones_recomendadas": [],
+        "explicacion": "Los intentos merecen revisión.",
+        "limitacion": "Los registros no confirman por sí solos un ataque.",
+    }
+
+
+def _valid_finding_classification() -> dict[str, object]:
+    return {
+        "finding_id": "F-TEST-01",
+        "riesgo": "Alto",
+        "justificacion": "Los intentos repetidos pueden indicar fuerza bruta.",
+        "tecnica_mitre": ["T1110"],
+        "confianza": 4,
+        "evidence_ids": ["LOG-001"],
+    }
+
+
+def test_interpret_endpoint_classifies_every_finding_without_changing_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "incidents", [_incident_with_finding()])
+    monkeypatch.setattr(app.state, "gemini_interpretations", {})
+    model_result = _classification_response([_valid_finding_classification()])
+    calls: list[str] = []
+
+    def fake_post(*args: object, **kwargs: object) -> httpx.Response:
+        calls.append("called")
+        return httpx.Response(200, json={"output_text": json.dumps(model_result)})
+
+    monkeypatch.setattr(gemini.httpx, "post", fake_post)
+
+    response = client.post("/api/incidents/I-TEST/interpret")
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["baseline_risk_level"] == "Alto"
+    assert result["clasificaciones_hallazgos"] == [{
+        **_valid_finding_classification(),
+        "baseline_technique_ids": ["T1110"],
+    }]
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("classifications", "expected_detail"),
+    [
+        ([{
+            **_valid_finding_classification(),
+            "finding_id": "F-FAKE",
+        }], "finding_id"),
+        ([{
+            **_valid_finding_classification(),
+            "tecnica_mitre": ["T9999"],
+        }], "técnica MITRE"),
+        ([{
+            **_valid_finding_classification(),
+            "evidence_ids": ["LOG-999"],
+        }], "evidencia"),
+        ([], "no clasificó todos"),
+    ],
+)
+def test_interpret_endpoint_rejects_unverified_finding_classifications(
+    monkeypatch: pytest.MonkeyPatch,
+    classifications: list[dict[str, object]],
+    expected_detail: str,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "incidents", [_incident_with_finding()])
+    monkeypatch.setattr(app.state, "gemini_interpretations", {})
+    model_result = _classification_response(classifications)
+    monkeypatch.setattr(
+        gemini.httpx,
+        "post",
+        lambda *args, **kwargs: httpx.Response(200, json={"output_text": json.dumps(model_result)}),
+    )
+
+    response = client.post("/api/incidents/I-TEST/interpret")
+
+    assert response.status_code == 502
+    assert expected_detail in response.json()["detail"]

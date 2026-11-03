@@ -12,6 +12,7 @@ from .gemini import (
     GeminiConfigurationError,
     gemini_status,
     interpret_incident,
+    suggest_finding_correlation,
 )
 from .ingest import EXPECTED_COLUMNS, WorkbookValidationError, read_events
 from .normalize import normalize_events, quality_warnings
@@ -26,6 +27,7 @@ app.state.informational_findings = []
 app.state.hypotheses = []
 app.state.analysis_ready = False
 app.state.gemini_interpretations = {}
+app.state.gemini_correlations = {}
 
 
 @app.get("/api/health")
@@ -53,6 +55,7 @@ def upload_workbook(file: Annotated[UploadFile, File()]) -> dict[str, Any]:
     app.state.hypotheses = []
     app.state.analysis_ready = False
     app.state.gemini_interpretations = {}
+    app.state.gemini_correlations = {}
     return {
         "filename": filename,
         "event_count": len(events),
@@ -74,6 +77,7 @@ def analyze_events() -> dict[str, Any]:
     app.state.informational_findings = correlation["informational_findings"]
     app.state.hypotheses = correlation["hypotheses"]
     app.state.gemini_interpretations = {}
+    app.state.gemini_correlations = {}
     app.state.analysis_ready = True
     return {
         "event_count": len(app.state.events),
@@ -139,6 +143,34 @@ def get_incidents(
 @app.get("/api/ai/status")
 def get_ai_status() -> dict[str, Any]:
     return gemini_status()
+
+
+@app.post("/api/ai/correlate")
+def correlate_findings_with_gemini() -> dict[str, Any]:
+    if not app.state.analysis_ready:
+        raise HTTPException(status_code=409, detail="Ejecute /api/analyze antes de proponer una correlación.")
+    if not app.state.findings:
+        raise HTTPException(status_code=409, detail="No hay hallazgos para correlacionar con Gemini.")
+
+    model = gemini_status()["model"]
+    cached_result = app.state.gemini_correlations.get("analysis")
+    if cached_result and cached_result.get("model") == model:
+        return {**cached_result, "cache_hit": True}
+
+    try:
+        result = suggest_finding_correlation(
+            app.state.findings,
+            app.state.events,
+            app.state.incidents,
+        )
+    except GeminiConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except GeminiAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    result["cache_hit"] = False
+    app.state.gemini_correlations["analysis"] = result
+    return result
 
 
 @app.post("/api/incidents/{incident_id}/interpret")

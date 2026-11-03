@@ -14,16 +14,46 @@ export interface GeminiRecommendedCheck {
   evidence_ids: string[];
 }
 
+export interface GeminiFindingClassification {
+  finding_id: string;
+  riesgo: "Crítico" | "Alto" | "Medio" | "Bajo";
+  justificacion: string;
+  tecnica_mitre: string[];
+  confianza: number;
+  evidence_ids: string[];
+  baseline_technique_ids: string[];
+}
+
 export interface GeminiInterpretation {
   incident_id: string;
   model: string;
   conclusion: "sospechoso" | "no_suficiente";
   evidence_ids: string[];
+  clasificaciones_hallazgos: GeminiFindingClassification[];
   origenes: GeminiOriginAnalysis[];
   comprobaciones_recomendadas: GeminiRecommendedCheck[];
   explicacion: string;
   limitacion: string;
   baseline_risk_level: string | null;
+  cache_hit: boolean;
+}
+
+export interface GeminiCorrelationGroup {
+  group_id: string;
+  type: "incidente" | "aislado";
+  title: string;
+  finding_ids: string[];
+  justificacion: string;
+  confidence: number;
+  evidence_ids: string[];
+  baseline_incident_ids: string[];
+}
+
+export interface GeminiCorrelation {
+  model: string;
+  groups: GeminiCorrelationGroup[];
+  finding_count: number;
+  baseline_incident_count: number;
   cache_hit: boolean;
 }
 
@@ -140,6 +170,7 @@ export interface AnalysisResult {
   incident_count: number;
   incidents: Incident[];
   informational_finding_count: number;
+  findings: Finding[];
   hypotheses: {
     type: string;
     incident_ids: string[];
