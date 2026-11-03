@@ -5,6 +5,7 @@ import {
   type Dashboard,
   type EventPage,
   type EventRecord,
+  type GeminiCorrelation,
   type GeminiInterpretation,
   type GeminiStatus,
   type Incident,
@@ -106,6 +107,9 @@ function App() {
   const [geminiBusy, setGeminiBusy] = useState(false);
   const [geminiResult, setGeminiResult] = useState<GeminiInterpretation | null>(null);
   const [geminiError, setGeminiError] = useState("");
+  const [geminiCorrelation, setGeminiCorrelation] = useState<GeminiCorrelation | null>(null);
+  const [geminiCorrelationBusy, setGeminiCorrelationBusy] = useState(false);
+  const [geminiCorrelationError, setGeminiCorrelationError] = useState("");
 
   useEffect(() => {
     apiRequest<GeminiStatus>("/api/ai/status")
@@ -153,6 +157,8 @@ function App() {
       setSelectedIncident(null);
       setGeminiResult(null);
       setGeminiError("");
+      setGeminiCorrelation(null);
+      setGeminiCorrelationError("");
       setRiskFilter("");
       setActiveFilters(EMPTY_FILTERS);
       setFilterDraft(EMPTY_FILTERS);
@@ -181,6 +187,8 @@ function App() {
       setSelectedIncident(null);
       setGeminiResult(null);
       setGeminiError("");
+      setGeminiCorrelation(null);
+      setGeminiCorrelationError("");
       setSection("dashboard");
       setNotice(`Análisis terminado: ${result.incident_count} incidentes y ${result.finding_count} hallazgos de reglas.`);
       await loadEvents(1, activeFilters);
@@ -251,6 +259,22 @@ function App() {
     }
   }
 
+  async function suggestCorrelationWithGemini() {
+    if (!analysis || !geminiStatus?.enabled) return;
+    setGeminiCorrelationBusy(true);
+    setGeminiCorrelationError("");
+    try {
+      const result = await apiRequest<GeminiCorrelation>("/api/ai/correlate", { method: "POST" });
+      setGeminiCorrelation(result);
+    } catch (caught) {
+      setGeminiCorrelationError(
+        caught instanceof Error ? caught.message : "No se pudo proponer la correlación con Gemini.",
+      );
+    } finally {
+      setGeminiCorrelationBusy(false);
+    }
+  }
+
   function setFilter<K extends keyof EventFilters>(key: K, value: EventFilters[K]) {
     setFilterDraft((current) => ({ ...current, [key]: value }));
   }
@@ -283,10 +307,10 @@ function App() {
                 onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
               />
             </label>
-            <button className="button button-secondary" type="submit" disabled={!selectedFile || busy !== null || geminiBusy}>
+            <button className="button button-secondary" type="submit" disabled={!selectedFile || busy !== null || geminiBusy || geminiCorrelationBusy}>
               {busy === "upload" ? "Cargando…" : "Cargar Excel"}
             </button>
-            <button className="button button-primary" type="button" onClick={analyzeWorkbook} disabled={!upload || busy !== null || geminiBusy}>
+            <button className="button button-primary" type="button" onClick={analyzeWorkbook} disabled={!upload || busy !== null || geminiBusy || geminiCorrelationBusy}>
               {busy === "analysis" ? "Analizando…" : analysis ? "Volver a analizar" : "Analizar archivo"}
             </button>
           </form>
@@ -336,6 +360,7 @@ function App() {
                 <button
                   className={`nav-tab ${section === key ? "active" : ""}`}
                   key={key}
+                  disabled={geminiBusy || geminiCorrelationBusy}
                   onClick={() => setSection(key)}
                   type="button"
                 >
@@ -346,7 +371,17 @@ function App() {
 
             <div className="tab-content">
               {section === "dashboard" && (
-                <DashboardView dashboard={dashboard} analysis={analysis} onOpenIncidents={() => setSection("incidents")} />
+                <DashboardView
+                  dashboard={dashboard}
+                  analysis={analysis}
+                  geminiStatus={geminiStatus}
+                  geminiLoading={geminiLoading}
+                  geminiCorrelation={geminiCorrelation}
+                  geminiCorrelationBusy={geminiCorrelationBusy}
+                  geminiCorrelationError={geminiCorrelationError}
+                  onSuggestCorrelation={() => void suggestCorrelationWithGemini()}
+                  onOpenIncidents={() => setSection("incidents")}
+                />
               )}
 
               {section === "incidents" && (
@@ -354,7 +389,7 @@ function App() {
                   <Panel
                     title="Incidentes detectados"
                     action={
-                      <select aria-label="Filtrar incidentes por criticidad" value={riskFilter} disabled={!analysis || geminiBusy} onChange={(event) => void loadIncidentsByRisk(event.target.value)}>
+                      <select aria-label="Filtrar incidentes por criticidad" value={riskFilter} disabled={!analysis || geminiBusy || geminiCorrelationBusy} onChange={(event) => void loadIncidentsByRisk(event.target.value)}>
                         <option value="">Todas las criticidades</option>
                         <option value="Crítico">Crítico</option>
                         <option value="Alto">Alto</option>
@@ -370,7 +405,7 @@ function App() {
                         {incidentList.map((incident) => (
                           <button
                             className={`incident-row ${selectedIncident?.incident_id === incident.incident_id ? "selected" : ""}`}
-                            disabled={geminiBusy}
+                            disabled={geminiBusy || geminiCorrelationBusy}
                             key={incident.incident_id}
                             onClick={() => void openIncident(incident.incident_id)}
                             type="button"
@@ -444,10 +479,22 @@ function App() {
 function DashboardView({
   dashboard,
   analysis,
+  geminiStatus,
+  geminiLoading,
+  geminiCorrelation,
+  geminiCorrelationBusy,
+  geminiCorrelationError,
+  onSuggestCorrelation,
   onOpenIncidents,
 }: {
   dashboard: Dashboard | null;
   analysis: AnalysisResult | null;
+  geminiStatus: GeminiStatus | null;
+  geminiLoading: boolean;
+  geminiCorrelation: GeminiCorrelation | null;
+  geminiCorrelationBusy: boolean;
+  geminiCorrelationError: string;
+  onSuggestCorrelation: () => void;
   onOpenIncidents: () => void;
 }) {
   if (!dashboard?.analysis_ready || !analysis) {
@@ -477,6 +524,77 @@ function DashboardView({
         <MetricCard label="Incidentes" value={dashboard.incident_count} hint="Correlacionados con evidencia" />
         <MetricCard label="Hipótesis" value={analysis.hypotheses.length} hint="Vínculos no confirmados" />
       </div>
+
+      <Panel
+        title="Correlación IA de hallazgos"
+        action={
+          <button
+            className="button button-primary"
+            disabled={!geminiStatus?.enabled || geminiLoading || geminiCorrelationBusy}
+            onClick={onSuggestCorrelation}
+            type="button"
+          >
+            {geminiCorrelationBusy
+              ? "Correlacionando…"
+              : geminiCorrelation
+                ? "Consultar propuesta guardada"
+                : "Proponer correlación con Gemini"}
+          </button>
+        }
+      >
+        <p className="correlation-intro">
+          Una llamada analiza los {analysis.findings.length} hallazgos y los eventos vinculados a su evidencia. Esos datos se envían a Google; Gemini propone grupos, pero no modifica la correlación ni el riesgo deterministas. La respuesta se guarda en memoria para evitar llamadas repetidas.
+        </p>
+        {!geminiLoading && !geminiStatus?.enabled && (
+          <p className="muted-copy">Configura GEMINI_API_KEY en el backend para habilitar esta propuesta.</p>
+        )}
+        {geminiCorrelationError && <p className="gemini-error" role="alert">{geminiCorrelationError}</p>}
+        {geminiCorrelation && (
+          <div className="correlation-result" aria-live="polite">
+            <p className="gemini-cache-note">
+              {geminiCorrelation.cache_hit
+                ? "Propuesta recuperada de la caché; no se hizo otra llamada a Gemini."
+                : "Propuesta guardada en memoria para este análisis y modelo."}
+              {` Línea base: ${geminiCorrelation.baseline_incident_count} incidentes · Modelo ${geminiCorrelation.model} · ${geminiCorrelation.groups.filter((group) => group.type === "incidente").length} incidentes sugeridos · ${geminiCorrelation.groups.filter((group) => group.type === "aislado").length} hallazgos aislados.`}
+            </p>
+            <div className="correlation-groups">
+              {geminiCorrelation.groups.map((group) => (
+                <article className="correlation-group" key={group.group_id}>
+                  <div className="correlation-group-heading">
+                    <div>
+                      <span className={`correlation-kind ${group.type === "incidente" ? "is-incident" : "is-isolated"}`}>
+                        {group.type === "incidente" ? "Incidente sugerido" : "Hallazgo aislado"}
+                      </span>
+                      <h3>{group.group_id} · {group.title}</h3>
+                    </div>
+                    <span className="correlation-confidence">Confianza IA {group.confidence}/5</span>
+                  </div>
+                  <p>{group.justificacion}</p>
+                  <p className="correlation-baseline">
+                    <strong>Línea base:</strong> {group.baseline_incident_ids.length
+                      ? group.baseline_incident_ids.join(", ")
+                      : "Sin incidente determinista (hallazgo informativo)"}
+                  </p>
+                  <div className="correlation-finding-list">
+                    {group.finding_ids.map((findingId) => {
+                      const finding = analysis.findings.find((item) => item.finding_id === findingId);
+                      return (
+                        <span className="correlation-finding-tag" key={findingId}>
+                          <code>{findingId}</code>{finding ? ` · ${finding.rule_id} ${finding.name}` : ""}
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <p className="correlation-evidence"><strong>Evidencia:</strong> {group.evidence_ids.map((id) => <code key={id}>{id}</code>)}</p>
+                </article>
+              ))}
+            </div>
+            <p className="correlation-disclaimer">
+              Propuesta asesorativa, no confirmación de un incidente. Los hallazgos aislados no se consideran incidentes nuevos.
+            </p>
+          </div>
+        )}
+      </Panel>
 
       <div className="content-grid dashboard-grid">
         <Panel title="Incidentes por criticidad">

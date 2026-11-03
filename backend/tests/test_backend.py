@@ -258,6 +258,21 @@ def test_detection_evidence_only_references_existing_logs() -> None:
     assert all(set(finding["event_ids"]) <= valid_log_ids for finding in findings)
 
 
+def test_detection_finding_ids_are_unique_when_a_rule_reuses_first_evidence_log() -> None:
+    with REAL_WORKBOOK.open("rb") as source:
+        events = normalize_events(read_events(source))
+
+    findings = run_detections(events)
+    finding_ids = [finding["finding_id"] for finding in findings]
+    repeated_r02 = [finding for finding in findings if finding["finding_id"].startswith("R02-EVT-00199")]
+
+    assert len(finding_ids) == len(set(finding_ids))
+    assert {finding["finding_id"] for finding in repeated_r02} == {
+        "R02-EVT-00199-EVT-00206",
+        "R02-EVT-00199-EVT-00287",
+    }
+
+
 def test_internal_baseline_does_not_trigger_brute_force_rule() -> None:
     with REAL_WORKBOOK.open("rb") as source:
         events = normalize_events(read_events(source))
@@ -691,3 +706,240 @@ def test_interpret_endpoint_rejects_unverified_finding_classifications(
 
     assert response.status_code == 502
     assert expected_detail in response.json()["detail"]
+
+
+def _correlation_fixture() -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    findings = [
+        {
+            "finding_id": "F-01",
+            "rule_id": "R01",
+            "name": "Fallos de autenticación",
+            "explanation": "Varios intentos fallidos.",
+            "technique_ids": ["T1110"],
+            "event_ids": ["LOG-001"],
+            "first_seen": "2026-10-23T10:00:00",
+            "last_seen": "2026-10-23T10:02:00",
+            "entities": {"source_ips": ["203.0.113.10"]},
+        },
+        {
+            "finding_id": "F-02",
+            "rule_id": "R02",
+            "name": "Acceso exitoso posterior",
+            "explanation": "Acceso tras los fallos.",
+            "technique_ids": ["T1078"],
+            "event_ids": ["LOG-002"],
+            "first_seen": "2026-10-23T10:03:00",
+            "last_seen": "2026-10-23T10:03:00",
+            "entities": {"source_ips": ["203.0.113.10"]},
+        },
+        {
+            "finding_id": "F-03",
+            "rule_id": "R09",
+            "name": "Hallazgo informativo",
+            "explanation": "No hay evidencia de relación directa.",
+            "technique_ids": ["T1560.001"],
+            "event_ids": ["LOG-003"],
+            "first_seen": "2026-10-23T12:00:00",
+            "last_seen": "2026-10-23T12:00:00",
+            "entities": {"hosts": ["HOST-02"]},
+        },
+    ]
+    events = [
+        {"Log_ID": "LOG-001", "Timestamp": "2026-10-23T10:00:00", "Event_Description": "Fallo."},
+        {"Log_ID": "LOG-002", "Timestamp": "2026-10-23T10:03:00", "Event_Description": "Acceso correcto."},
+        {"Log_ID": "LOG-003", "Timestamp": "2026-10-23T12:00:00", "Event_Description": "Archivo comprimido."},
+    ]
+    incidents = [{"incident_id": "I-01", "finding_ids": ["F-01", "F-02"]}]
+    return findings, events, incidents
+
+
+def _valid_correlation_output() -> dict[str, Any]:
+    return {
+        "groups": [
+            {
+                "type": "incidente",
+                "title": "Intentos y acceso exitoso",
+                "finding_ids": ["F-01", "F-02"],
+                "justificacion": "El acceso exitoso sigue a los fallos desde la misma IP.",
+                "confidence": 4,
+                "evidence_ids": ["LOG-001", "LOG-002"],
+            },
+            {
+                "type": "aislado",
+                "title": "Hallazgo independiente",
+                "finding_ids": ["F-03"],
+                "justificacion": "No hay relación sustentada con los otros hallazgos.",
+                "confidence": 3,
+                "evidence_ids": ["LOG-003"],
+            },
+        ]
+    }
+
+
+def test_gemini_correlation_endpoint_returns_partition_and_caches_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.6-flash")
+    findings, events, incidents = _correlation_fixture()
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "findings", findings)
+    monkeypatch.setattr(app.state, "events", events)
+    monkeypatch.setattr(app.state, "incidents", incidents)
+    monkeypatch.setattr(app.state, "gemini_correlations", {})
+    model_result = _valid_correlation_output()
+    requests: list[dict[str, Any]] = []
+
+    def fake_post(*args: object, **kwargs: Any) -> httpx.Response:
+        requests.append(kwargs["json"])
+        return httpx.Response(200, json={"output_text": json.dumps(model_result)})
+
+    monkeypatch.setattr(gemini.httpx, "post", fake_post)
+
+    first = client.post("/api/ai/correlate")
+    second = client.post("/api/ai/correlate")
+
+    assert first.status_code == 200
+    result = first.json()
+    assert result["cache_hit"] is False
+    assert result["finding_count"] == 3
+    assert result["groups"][0]["group_id"] == "IA-01"
+    assert result["groups"][0]["baseline_incident_ids"] == ["I-01"]
+    assert result["groups"][1]["baseline_incident_ids"] == []
+    assert second.status_code == 200
+    assert second.json()["cache_hit"] is True
+    assert len(requests) == 1
+    assert "F-01" in requests[0]["input"]
+    assert "F-03" in requests[0]["input"]
+
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.8-flash")
+    third = client.post("/api/ai/correlate")
+
+    assert third.status_code == 200
+    assert third.json()["cache_hit"] is False
+    assert third.json()["model"] == "gemini-3.8-flash"
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize(
+    ("groups", "expected_detail"),
+    [
+        ([{
+            **_valid_correlation_output()["groups"][0],
+            "finding_ids": ["F-FAKE", "F-02"],
+        }, _valid_correlation_output()["groups"][1]], "finding_id que no existen"),
+        ([
+            _valid_correlation_output()["groups"][0],
+            {
+                **_valid_correlation_output()["groups"][1],
+                "finding_ids": ["F-02"],
+                "type": "aislado",
+            },
+        ], "más de un grupo"),
+        ([_valid_correlation_output()["groups"][0]], "omitió hallazgos"),
+        ([
+            {
+                **_valid_correlation_output()["groups"][0],
+                "evidence_ids": ["LOG-003"],
+            },
+            _valid_correlation_output()["groups"][1],
+        ], "evidencia que no pertenece"),
+    ],
+)
+def test_gemini_correlation_rejects_invalid_partition_and_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    groups: list[dict[str, Any]],
+    expected_detail: str,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    findings, events, incidents = _correlation_fixture()
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "findings", findings)
+    monkeypatch.setattr(app.state, "events", events)
+    monkeypatch.setattr(app.state, "incidents", incidents)
+    monkeypatch.setattr(app.state, "gemini_correlations", {})
+    model_result = {"groups": groups}
+    monkeypatch.setattr(
+        gemini.httpx,
+        "post",
+        lambda *args, **kwargs: httpx.Response(200, json={"output_text": json.dumps(model_result)}),
+    )
+
+    response = client.post("/api/ai/correlate")
+
+    assert response.status_code == 502
+    assert expected_detail in response.json()["detail"]
+
+
+def test_gemini_correlation_accepts_all_unique_findings_from_reference_workbook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    with REAL_WORKBOOK.open("rb") as source:
+        upload = client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    REAL_WORKBOOK.name,
+                    source,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+    assert upload.status_code == 200
+    analysis_response = client.post("/api/analyze")
+    assert analysis_response.status_code == 200
+    findings = app.state.findings
+    ids = [finding["finding_id"] for finding in findings]
+    assert len(ids) == len(set(ids))
+
+    model_result = {
+        "groups": [
+            {
+                "type": "aislado",
+                "title": finding["name"],
+                "finding_ids": [finding["finding_id"]],
+                "justificacion": "Mock: no se afirma una relación con otros hallazgos.",
+                "confidence": 3,
+                "evidence_ids": [finding["event_ids"][0]],
+            }
+            for finding in findings
+        ]
+    }
+    monkeypatch.setattr(
+        gemini.httpx,
+        "post",
+        lambda *args, **kwargs: httpx.Response(200, json={"output_text": json.dumps(model_result)}),
+    )
+
+    response = client.post("/api/ai/correlate")
+
+    assert response.status_code == 200
+    assert response.json()["finding_count"] == 35
+    assert len(response.json()["groups"]) == 35
+
+
+def test_gemini_correlation_rejects_duplicate_input_ids_before_network_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    findings, events, incidents = _correlation_fixture()
+    findings[1]["finding_id"] = findings[0]["finding_id"]
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "findings", findings)
+    monkeypatch.setattr(app.state, "events", events)
+    monkeypatch.setattr(app.state, "incidents", incidents)
+    monkeypatch.setattr(app.state, "gemini_correlations", {})
+    calls: list[str] = []
+
+    def fake_post(*args: object, **kwargs: Any) -> httpx.Response:
+        calls.append("called")
+        return httpx.Response(200, json={"output_text": "{}"})
+
+    monkeypatch.setattr(gemini.httpx, "post", fake_post)
+
+    response = client.post("/api/ai/correlate")
+
+    assert response.status_code == 409
+    assert "finding_id duplicados" in response.json()["detail"]
+    assert calls == []

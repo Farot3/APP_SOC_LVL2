@@ -14,8 +14,11 @@ clasificó los nueve hallazgos de I-02 en una llamada; el backend aceptó la res
 tras validar IDs, evidencia y técnicas. La caché funciona en memoria. Las pruebas
 automatizadas siguen usando respuestas simuladas; falta comprobar más incidentes
 para aumentar la cobertura real.
-- **Fases 5–6: pendientes.** Correlación IA de hallazgos entre incidentes e informes
-IA ejecutivo y técnico.
+- **Fase 5: implementada y validada en vivo inicialmente.** Con Gemini 3.6 Flash,
+  una llamada cubrió los 35 hallazgos en 20 grupos; la salida pasó la validación y
+  no cambió la línea base determinista. La caché devolvió el resultado al consultar
+  de nuevo, sin una llamada adicional.
+- **Fase 6: pendiente.** Informes IA ejecutivo y técnico.
 - **Fase 7: parcial/completada para la base actual.** Dashboard y detalle de
 incidentes están disponibles; el informe individual se imprime/guarda como PDF
 desde el navegador. Falta integrar los informes IA de la fase 6 cuando existan.
@@ -55,14 +58,18 @@ como hipótesis no confirmadas.
   verifica un caso, no todas las combinaciones de respuesta. No hacer reintentos
   automáticos ante `503` o timeout; verificar cuota y disponibilidad antes de reintentar.
 
-### 5. Correlación IA e incidentes — pendiente
+### 5. Correlación IA e incidentes — implementada; validación real inicial aprobada
 
-Agregar una solicitud explícita para proponer agrupaciones de hallazgos en
-incidentes. El backend deberá validar que los IDs referenciados sean reales y que
-la salida forme una partición válida, sin omisiones ni duplicados. La correlación
-actual seguirá siendo la línea base y las sugerencias de IA se mostrarán como
-alternativas, no como relaciones confirmadas. Diseñar el tamaño de entrada y la
-caché antes de habilitar la llamada sobre libros grandes.
+En **Resumen**, el usuario puede solicitar una propuesta global. Una llamada analiza
+los hallazgos y sus eventos de evidencia, y devuelve incidentes sugeridos o hallazgos
+aislados. El backend exige que todos los `finding_id` aparezcan exactamente una vez,
+que los grupos tengan forma válida y que los `Log_ID` citados pertenezcan a cada
+hallazgo del grupo. Añade al resultado los IDs de incidentes deterministas para
+comparar propuestas. La línea base no se modifica y la propuesta queda cacheada por
+análisis/modelo en memoria. **Prueba en vivo:** con `gemini-3.6-flash`, los 35
+hallazgos se repartieron en cuatro grupos de incidente y 16 hallazgos aislados; la
+respuesta pasó la validación. El resultado se recuperó luego de caché, sin otra
+llamada a Google. Las pruebas automatizadas usan mocks.
 
 ### 6. Informes ejecutivo y técnico — pendiente
 
@@ -94,6 +101,6 @@ Las pruebas automatizadas no hacen llamadas de red.
 ## Siguiente paso
 
 La fase 4 está implementada, probada automáticamente con mocks y validada en vivo
-con I-02 usando `gemini-3.6-flash`. El siguiente bloque de implementación es la
-fase 5: correlación IA de hallazgos entre incidentes, manteniendo la correlación
-determinista como línea base. La fase 6 (informes ejecutivo y técnico) viene después.
+con I-02 usando `gemini-3.6-flash`. La fase 5 también está implementada y tuvo una
+primera validación en vivo con los 35 hallazgos del Excel de referencia. El siguiente
+bloque es la fase 6: informes ejecutivo y técnico.

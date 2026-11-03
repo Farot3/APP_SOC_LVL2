@@ -460,6 +460,7 @@ def _package_correlation(
         "Source_IP",
         "Destination",
         "Event_Description",
+        "Process_CommandLine",
     )
     return {
         "findings": [
@@ -506,7 +507,7 @@ def validate_correlation_output(
         confidence = group.get("confidence")
         evidence_ids = group.get("evidence_ids")
 
-        if group_type not in {"incidente", "aislado"}:
+        if not isinstance(group_type, str) or group_type not in {"incidente", "aislado"}:
             raise GeminiAPIError(502, "Gemini devolvió un tipo de grupo no permitido.")
         if not isinstance(title, str) or not title.strip():
             raise GeminiAPIError(502, "Gemini omitió el título de un grupo.")
@@ -540,8 +541,14 @@ def validate_correlation_output(
             for finding_id in finding_ids
             for log_id in findings_by_id[finding_id].get("event_ids", [])
         } & set(events_by_id)
-        if not set(evidence_ids) <= allowed_evidence:
+        cited_evidence = set(evidence_ids)
+        if not cited_evidence <= allowed_evidence:
             raise GeminiAPIError(502, "Gemini citó evidencia que no pertenece a los hallazgos del grupo.")
+        if any(
+            not cited_evidence & set(findings_by_id[finding_id].get("event_ids", []))
+            for finding_id in finding_ids
+        ):
+            raise GeminiAPIError(502, "La evidencia del grupo debe respaldar cada hallazgo incluido.")
 
         baseline_ids = [
             incident["incident_id"]
@@ -580,6 +587,13 @@ def suggest_finding_correlation(
     events: list[dict[str, Any]],
     incidents: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    finding_ids = [str(finding.get("finding_id")) for finding in findings]
+    if len(finding_ids) != len(set(finding_ids)):
+        raise GeminiAPIError(
+            409,
+            "El análisis contiene finding_id duplicados; vuelve a analizar antes de correlacionar.",
+        )
+
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise GeminiConfigurationError("Gemini no está configurado. Define GEMINI_API_KEY en el entorno del backend.")

@@ -1,6 +1,6 @@
 import ipaddress
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from itertools import pairwise
 from typing import Any
@@ -596,11 +596,41 @@ def _r14(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return findings
 
 
+def _disambiguate_finding_ids(findings: list[dict[str, Any]]) -> None:
+    """Preserve unique legacy IDs and suffix collisions with the final evidence Log_ID."""
+    counts = Counter(finding["finding_id"] for finding in findings)
+    reserved_ids = set(counts)
+    used_ids = {finding["finding_id"] for finding in findings if counts[finding["finding_id"]] == 1}
+    duplicate_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for finding in findings:
+        if counts[finding["finding_id"]] > 1:
+            duplicate_groups[finding["finding_id"]].append(finding)
+
+    for base_id, duplicates in duplicate_groups.items():
+        ordered_duplicates = sorted(duplicates, key=lambda finding: tuple(finding.get("event_ids", [])))
+        for index, finding in enumerate(ordered_duplicates, start=1):
+            evidence_ids = finding.get("event_ids", [])
+            suffix = evidence_ids[-1] if evidence_ids else f"sin-evidencia-{index:02d}"
+            candidate = f"{base_id}-{suffix}"
+            if candidate in reserved_ids or candidate in used_ids:
+                candidate = f"{candidate}-{index:02d}"
+            while candidate in reserved_ids or candidate in used_ids:
+                candidate = f"{candidate}-{index:02d}"
+            finding["finding_id"] = candidate
+            used_ids.add(candidate)
+
+
 def run_detections(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Run deterministic rules R01-R14; every finding includes source Log_ID evidence."""
     rules = (_r01, _r02, _r03, _r04, _r05, _r06, _r07, _r08, _r09, _r10, _r11, _r12, _r13, _r14)
     findings = [finding for rule in rules for finding in rule(events)]
+    _disambiguate_finding_ids(findings)
     return sorted(
         findings,
-        key=lambda finding: (finding["first_seen"] or "", finding["rule_id"], finding["finding_id"]),
+        key=lambda finding: (
+            finding["first_seen"] or "",
+            finding["rule_id"],
+            finding["finding_id"],
+            tuple(finding.get("event_ids", [])),
+        ),
     )
