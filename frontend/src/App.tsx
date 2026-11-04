@@ -19,7 +19,7 @@ import {
   type WorkbookPreview,
 } from "./api";
 
-type Section = "dashboard" | "incidents" | "events";
+type Section = "dashboard" | "reports" | "incidents" | "events";
 type EventFilters = {
   host: string;
   user: string;
@@ -527,13 +527,14 @@ function App() {
             <nav className="section-nav">
               {([
                 ["dashboard", "Resumen"],
+                ["reports", "Informes"],
                 ["incidents", "Incidentes", analysis?.incident_count],
                 ["events", "Eventos", upload.event_count],
               ] as [Section, string, number?][]).map(([key, label, count]) => (
                 <button
                   className={`nav-tab ${section === key ? "active" : ""}`}
                   key={key}
-                  disabled={geminiBusy || geminiCorrelationBusy || geminiReportBusy}
+                  disabled={(key === "reports" && !analysis) || geminiBusy || geminiCorrelationBusy || geminiReportBusy}
                   onClick={() => setSection(key)}
                   type="button"
                 >
@@ -552,16 +553,23 @@ function App() {
                   geminiCorrelation={geminiCorrelation}
                   geminiCorrelationBusy={geminiCorrelationBusy}
                   geminiCorrelationError={geminiCorrelationError}
+                  geminiRequestBusy={geminiBusy || geminiCorrelationBusy || geminiReportBusy}
+                  onSuggestCorrelation={() => void suggestCorrelationWithGemini()}
+                  onOpenIncidents={() => setSection("incidents")}
+                />
+              )}
+
+              {section === "reports" && (
+                <ReportsView
+                  analysis={analysis}
                   executiveReport={executiveReport}
                   technicalReport={technicalReport}
-                  geminiReportBusy={geminiReportBusy}
-                  geminiRequestBusy={geminiBusy || geminiCorrelationBusy || geminiReportBusy}
-                  geminiReportError={geminiReportError}
                   geminiEnabled={Boolean(geminiStatus?.enabled && !geminiLoading)}
-                  onSuggestCorrelation={() => void suggestCorrelationWithGemini()}
+                  geminiRequestBusy={geminiBusy || geminiCorrelationBusy || geminiReportBusy}
+                  geminiReportBusy={geminiReportBusy}
+                  geminiReportError={geminiReportError}
                   onGenerateReport={(type) => void generateReport(type)}
                   onPrintReport={(type) => printReport(type)}
-                  onOpenIncidents={() => setSection("incidents")}
                 />
               )}
 
@@ -668,15 +676,8 @@ function DashboardView({
   geminiCorrelation,
   geminiCorrelationBusy,
   geminiCorrelationError,
-  executiveReport,
-  technicalReport,
-  geminiReportBusy,
   geminiRequestBusy,
-  geminiReportError,
-  geminiEnabled,
   onSuggestCorrelation,
-  onGenerateReport,
-  onPrintReport,
   onOpenIncidents,
 }: {
   dashboard: Dashboard | null;
@@ -686,15 +687,8 @@ function DashboardView({
   geminiCorrelation: GeminiCorrelation | null;
   geminiCorrelationBusy: boolean;
   geminiCorrelationError: string;
-  executiveReport: GeminiExecutiveReport | null;
-  technicalReport: GeminiTechnicalReport | null;
-  geminiReportBusy: boolean;
   geminiRequestBusy: boolean;
-  geminiReportError: string;
-  geminiEnabled: boolean;
   onSuggestCorrelation: () => void;
-  onGenerateReport: (type: "executive" | "technical") => void;
-  onPrintReport: (type: "executive" | "technical") => void;
   onOpenIncidents: () => void;
 }) {
   if (!dashboard?.analysis_ready || !analysis) {
@@ -796,21 +790,6 @@ function DashboardView({
         )}
       </Panel>
 
-      <Panel title="Informes IA">
-        <p className="report-intro">Genera cada informe por separado y solo cuando lo solicites. Cada botón puede realizar una llamada a Gemini; los resultados se guardan en memoria por tipo y modelo. Se envían a Google los hallazgos y eventos relevantes. La IA no modifica la línea base determinista.</p>
-        {!geminiEnabled && <p className="muted-copy">Configura GEMINI_API_KEY en el backend para habilitar la generación de informes.</p>}
-        <div className="report-generation-actions">
-          <button className="button button-primary" disabled={!geminiEnabled || geminiRequestBusy} onClick={() => onGenerateReport("executive")} type="button">
-            {geminiReportBusy ? "Generando informe…" : executiveReport ? "Consultar informe ejecutivo guardado" : "Generar informe ejecutivo"}
-          </button>
-          <button className="button button-primary" disabled={!geminiEnabled || geminiRequestBusy} onClick={() => onGenerateReport("technical")} type="button">
-            {geminiReportBusy ? "Generando informe…" : technicalReport ? "Consultar informe técnico guardado" : "Generar informe técnico"}
-          </button>
-        </div>
-        {geminiReportError && <p className="gemini-error" role="alert">{geminiReportError}</p>}
-        {executiveReport && <ExecutiveReportView report={executiveReport} onPrint={() => onPrintReport("executive")} />}
-        {technicalReport && <TechnicalReportView report={technicalReport} analysis={analysis} onPrint={() => onPrintReport("technical")} />}
-      </Panel>
 
       <div className="content-grid dashboard-grid">
         <Panel title="Incidentes por criticidad">
@@ -877,6 +856,69 @@ function DashboardView({
           </div>
         </Panel>
       )}
+    </div>
+  );
+}
+
+function ReportsView({
+  analysis,
+  executiveReport,
+  technicalReport,
+  geminiEnabled,
+  geminiRequestBusy,
+  geminiReportBusy,
+  geminiReportError,
+  onGenerateReport,
+  onPrintReport,
+}: {
+  analysis: AnalysisResult | null;
+  executiveReport: GeminiExecutiveReport | null;
+  technicalReport: GeminiTechnicalReport | null;
+  geminiEnabled: boolean;
+  geminiRequestBusy: boolean;
+  geminiReportBusy: boolean;
+  geminiReportError: string;
+  onGenerateReport: (type: "executive" | "technical") => void;
+  onPrintReport: (type: "executive" | "technical") => void;
+}) {
+  if (!analysis) {
+    return (
+      <section className="empty-state">
+        <div className="empty-icon" aria-hidden="true">▤</div>
+        <h2>Los informes estarán disponibles después del análisis</h2>
+        <p>Primero ejecuta el análisis determinista. Después podrás generar cada informe por separado.</p>
+      </section>
+    );
+  }
+
+  return (
+    <div className="dashboard-stack">
+      <div className="section-title-row">
+        <div><span className="section-kicker">ANÁLISIS ASISTIDO</span><h2>Informes</h2></div>
+      </div>
+      <p className="report-intro">Elige el informe que necesitas. Cada uno se genera bajo demanda y puede realizar una llamada a Gemini. Solo se envían los hallazgos y eventos relevantes; las propuestas no modifican la línea base determinista.</p>
+      {!geminiEnabled && <p className="muted-copy">Configura GEMINI_API_KEY en el backend para habilitar la generación de informes.</p>}
+      {geminiReportError && <p className="gemini-error" role="alert">{geminiReportError}</p>}
+      <Panel
+        title="Informe ejecutivo"
+        action={(
+          <button className="button button-primary" disabled={!geminiEnabled || geminiRequestBusy} onClick={() => onGenerateReport("executive")} type="button">
+            {geminiReportBusy ? "Generando informe…" : executiveReport ? "Consultar informe guardado" : "Generar informe"}
+          </button>
+        )}
+      >
+        {executiveReport ? <ExecutiveReportView report={executiveReport} onPrint={() => onPrintReport("executive")} /> : <p className="empty-copy">Aún no se ha generado el informe ejecutivo.</p>}
+      </Panel>
+      <Panel
+        title="Informe técnico"
+        action={(
+          <button className="button button-primary" disabled={!geminiEnabled || geminiRequestBusy} onClick={() => onGenerateReport("technical")} type="button">
+            {geminiReportBusy ? "Generando informe…" : technicalReport ? "Consultar informe guardado" : "Generar informe"}
+          </button>
+        )}
+      >
+        {technicalReport ? <TechnicalReportView report={technicalReport} analysis={analysis} onPrint={() => onPrintReport("technical")} /> : <p className="empty-copy">Aún no se ha generado el informe técnico.</p>}
+      </Panel>
     </div>
   );
 }
