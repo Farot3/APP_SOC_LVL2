@@ -18,6 +18,7 @@ python -m venv .venv
 Desde `backend/`, si deseas usar Gemini, define la clave en la misma terminal donde iniciarás Uvicorn:
 
 ```powershell
+$env:GEMINI_TIMEOUT_SECONDS = "300" 
 $secureKey = Read-Host "API key de Gemini" -AsSecureString
 $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
 try {

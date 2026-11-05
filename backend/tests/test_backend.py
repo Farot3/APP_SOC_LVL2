@@ -1085,6 +1085,32 @@ def test_ai_report_rejects_unverified_evidence(monkeypatch: pytest.MonkeyPatch) 
     assert "evidencia ajena" in response.json()["detail"]
 
 
+def test_ai_report_rejects_action_citing_another_findings_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    findings, events, incidents = _analysis_report_fixture()
+    monkeypatch.setattr(app.state, "analysis_ready", True)
+    monkeypatch.setattr(app.state, "findings", findings)
+    monkeypatch.setattr(app.state, "events", events)
+    monkeypatch.setattr(app.state, "incidents", incidents)
+    monkeypatch.setattr(app.state, "gemini_reports", {})
+    invalid_output = _valid_executive_report()
+    invalid_output["recommended_actions"][0]["action"] = "Revocar credenciales y restablecer sesiones activas."
+    invalid_output["recommended_actions"][0]["evidence_ids"] = ["LOG-003"]
+    monkeypatch.setattr(
+        gemini.httpx,
+        "post",
+        lambda *args, **kwargs: httpx.Response(200, json={"output_text": json.dumps(invalid_output)}),
+    )
+
+    response = client.post("/api/ai/reports/executive")
+
+    assert response.status_code == 502
+    assert "evidencia ajena a los hallazgos" in response.json()["detail"]
+    assert "Revocar credenciales" in response.json()["detail"]
+
+
 @pytest.mark.parametrize("techniques", [["T9999"], ["T1110"]])
 def test_ai_technical_report_rejects_incomplete_or_unrelated_techniques(
     monkeypatch: pytest.MonkeyPatch,

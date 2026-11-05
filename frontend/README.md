@@ -38,8 +38,10 @@ npm run preview
 ## Secciones de la aplicación
 
 - **Resumen:** métricas deterministas y propuesta opcional de correlación IA.
-- **Informes:** generación independiente de informes ejecutivo y técnico, con opción de imprimir o guardar como PDF.
+- **Informe:** generación bajo demanda de un único PDF con portada, matriz de riesgo, hallazgos y evidencias y plan de acción. La línea de tiempo de eventos correlacionados se puede incluir opcionalmente. Solo solicita el nombre de quien presenta.
 - **Incidentes:** riesgo, hallazgos, eventos y evidencia.
 - **Eventos:** registros normalizados con filtros y paginación.
+
+Desde la pestaña **Informe**, genera el informe completo y completa el nombre de quien presenta. La casilla para incluir la línea de tiempo está desactivada por defecto. La fecha se añade al imprimir. Las solicitudes a Gemini son explícitas y bajo demanda; imprimir el PDF no inicia nuevas solicitudes.
 
 La importación permite revisar y confirmar el mapeo de columnas antes de analizar. Si Gemini está configurado en el backend, se puede solicitar una sugerencia de mapeo basada solo en los encabezados. Para el arranque completo del proyecto, consulta el [manual de ejecución](../docs/MANUAL_USUARIO.md).

@@ -1152,8 +1152,8 @@ def generate_analysis_report(
     )
     if report_type == "executive":
         prompt = f"""Redacta un informe ejecutivo SOC conciso basándote exclusivamente en el paquete.
-Resume el estado sin recalcular ni cambiar el riesgo determinista. Distingue observaciones de inferencias y no afirmes que un incidente está confirmado.
-Incluye entre 1 y 8 puntos clave, cada uno citado con finding_ids y Log_ID exactos. Propón como máximo cinco acciones prioritarias para analistas humanos; no ejecutes acciones. Cada recomendación debe citar hallazgos y evidencia que la motivan. No inventes atribución, reputación de IP ni impacto no observado.
+Resume el estado sin recalcular ni cambiar el riesgo determinista. Distingue observaciones de inferencias y no afirmes que un incidente está confirmado. baseline.finding_count es el total de hallazgos e incluye informational_finding_ids; describe los informativos como parte de ese total, nunca como hallazgos adicionales.
+Incluye entre 1 y 8 puntos clave, cada uno citado con finding_ids y Log_ID exactos. Propón como máximo cinco acciones prioritarias para analistas humanos; no ejecutes acciones. Cada recomendación debe citar hallazgos y evidencia que la motivan. Para cada acción, evidence_ids debe contener únicamente Log_ID incluidos en event_ids de los finding_ids citados; además, cita al menos un Log_ID propio de cada hallazgo asociado. No uses eventos de otros hallazgos aunque pertenezcan al mismo incidente y omite recomendaciones que no puedas respaldar con esas citas exactas. No inventes atribución, reputación de IP ni impacto no observado.
 Devuelve limitations con las incertidumbres importantes. Usa los niveles de riesgo del baseline como datos de referencia, no los sustituyas.
 
 Paquete:
@@ -1162,7 +1162,7 @@ Paquete:
         prompt = f"""Redacta un informe técnico SOC detallado pero conciso, basándote exclusivamente en el paquete.
 Devuelve exactamente un incident_details por cada incidente determinista y cubre exactamente sus finding_ids. Para cada incidente resume la secuencia observada, incluye exactamente el conjunto technique_ids del incidente y evidencia Log_ID que pertenezca a los hallazgos citados.
 Incluye exactamente cada informational_finding_id como un elemento de informational_findings; no lo presentes como incidente. Cada cita debe existir y pertenecer al hallazgo correspondiente.
-Distingue hechos de inferencias, no inventes cronologías, causas, técnicas ni acciones realizadas. No cambies incidentes, puntuaciones ni niveles de riesgo deterministas. Devuelve también limitations.
+Distingue hechos de inferencias, no inventes cronologías, causas, técnicas ni acciones realizadas. baseline.finding_count es el total de hallazgos e incluye informational_finding_ids; describe los informativos como parte de ese total, nunca como hallazgos adicionales. No cambies incidentes, puntuaciones ni niveles de riesgo deterministas. Devuelve también limitations.
 
 Paquete:
 {package_json}"""

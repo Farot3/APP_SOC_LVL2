@@ -7,7 +7,6 @@ import {
   type Dashboard,
   type EventPage,
   type EventRecord,
-  type GeminiAnalysisReport,
   type GeminiCorrelation,
   type GeminiExecutiveReport,
   type GeminiInterpretation,
@@ -42,6 +41,7 @@ const EMPTY_FILTERS: EventFilters = {
   start_time: "",
   end_time: "",
 };
+
 
 function displayTime(value: string | null | undefined): string {
   return value ? value.replace("T", " ") : "—";
@@ -122,7 +122,7 @@ function App() {
   const [geminiStatus, setGeminiStatus] = useState<GeminiStatus | null>(null);
   const [geminiLoading, setGeminiLoading] = useState(true);
   const [geminiBusy, setGeminiBusy] = useState(false);
-  const [geminiResult, setGeminiResult] = useState<GeminiInterpretation | null>(null);
+  const [geminiResultsByIncident, setGeminiResultsByIncident] = useState<Record<string, GeminiInterpretation>>({});
   const [geminiError, setGeminiError] = useState("");
   const [geminiCorrelation, setGeminiCorrelation] = useState<GeminiCorrelation | null>(null);
   const [geminiCorrelationBusy, setGeminiCorrelationBusy] = useState(false);
@@ -131,7 +131,9 @@ function App() {
   const [technicalReport, setTechnicalReport] = useState<GeminiTechnicalReport | null>(null);
   const [geminiReportBusy, setGeminiReportBusy] = useState(false);
   const [geminiReportError, setGeminiReportError] = useState("");
-  const [printTarget, setPrintTarget] = useState<"incident" | "executive" | "technical" | null>(null);
+  const [reportAuthorName, setReportAuthorName] = useState("");
+  const [includeTimelineInReport, setIncludeTimelineInReport] = useState(false);
+  const [printTarget, setPrintTarget] = useState<"final" | null>(null);
 
   useEffect(() => {
     const handleAfterPrint = () => setPrintTarget(null);
@@ -193,7 +195,7 @@ function App() {
       setDashboard(null);
       setIncidentList([]);
       setSelectedIncident(null);
-      setGeminiResult(null);
+      setGeminiResultsByIncident({});
       setGeminiError("");
       setGeminiCorrelation(null);
       setGeminiCorrelationError("");
@@ -255,7 +257,7 @@ function App() {
       setDashboard(null);
       setIncidentList([]);
       setSelectedIncident(null);
-      setGeminiResult(null);
+      setGeminiResultsByIncident({});
       setGeminiError("");
       setGeminiCorrelation(null);
       setGeminiCorrelationError("");
@@ -288,7 +290,7 @@ function App() {
       setDashboard(dashboardResult);
       setIncidentList(incidentsResult.items);
       setSelectedIncident(null);
-      setGeminiResult(null);
+      setGeminiResultsByIncident({});
       setGeminiError("");
       setGeminiCorrelation(null);
       setGeminiCorrelationError("");
@@ -338,7 +340,6 @@ function App() {
     try {
       const result = await apiRequest<Incident>(`/api/incidents/${encodeURIComponent(incidentId)}`);
       setSelectedIncident(result);
-      setGeminiResult(null);
       setGeminiError("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo cargar el incidente.");
@@ -349,15 +350,16 @@ function App() {
 
   async function interpretSelectedIncident() {
     if (!selectedIncident || !geminiStatus?.enabled || geminiBusy || geminiCorrelationBusy || geminiReportBusy) return;
+    const incidentId = selectedIncident.incident_id;
+    if (geminiResultsByIncident[incidentId]) return;
     setGeminiBusy(true);
     setGeminiError("");
-    setGeminiResult(null);
     try {
       const result = await apiRequest<GeminiInterpretation>(
-        `/api/incidents/${encodeURIComponent(selectedIncident.incident_id)}/interpret`,
+        `/api/incidents/${encodeURIComponent(incidentId)}/interpret`,
         { method: "POST" },
       );
-      setGeminiResult(result);
+      setGeminiResultsByIncident((current) => ({ ...current, [incidentId]: result }));
     } catch (caught) {
       setGeminiError(caught instanceof Error ? caught.message : "No se pudo interpretar el incidente con Gemini.");
     } finally {
@@ -381,23 +383,24 @@ function App() {
     }
   }
 
-  async function generateReport(reportType: "executive" | "technical") {
+  async function generateFinalReport() {
     if (!analysis || !geminiStatus?.enabled || geminiBusy || geminiCorrelationBusy || geminiReportBusy) return;
     setGeminiReportBusy(true);
     setGeminiReportError("");
     try {
-      const result = await apiRequest<GeminiAnalysisReport>(`/api/ai/reports/${reportType}`, { method: "POST" });
-      if (result.report_type === "executive") setExecutiveReport(result);
-      else setTechnicalReport(result);
+      const executive = await apiRequest<GeminiExecutiveReport>("/api/ai/reports/executive", { method: "POST" });
+      const technical = await apiRequest<GeminiTechnicalReport>("/api/ai/reports/technical", { method: "POST" });
+      setExecutiveReport(executive);
+      setTechnicalReport(technical);
     } catch (caught) {
-      setGeminiReportError(caught instanceof Error ? caught.message : "No se pudo generar el informe con Gemini.");
+      setGeminiReportError(caught instanceof Error ? caught.message : "No se pudo generar el informe completo con Gemini.");
     } finally {
       setGeminiReportBusy(false);
     }
   }
 
-  function printReport(target: "incident" | "executive" | "technical") {
-    setPrintTarget(target);
+  function printFinalReport() {
+    setPrintTarget("final");
     window.setTimeout(() => window.print(), 0);
   }
 
@@ -568,8 +571,12 @@ function App() {
                   geminiRequestBusy={geminiBusy || geminiCorrelationBusy || geminiReportBusy}
                   geminiReportBusy={geminiReportBusy}
                   geminiReportError={geminiReportError}
-                  onGenerateReport={(type) => void generateReport(type)}
-                  onPrintReport={(type) => printReport(type)}
+                  reportAuthorName={reportAuthorName}
+                  includeTimelineInReport={includeTimelineInReport}
+                  onAuthorNameChange={setReportAuthorName}
+                  onTimelineOptionChange={setIncludeTimelineInReport}
+                  onGenerateFinalReport={() => void generateFinalReport()}
+                  onPrintFinalReport={printFinalReport}
                 />
               )}
 
@@ -623,10 +630,9 @@ function App() {
                         geminiStatus={geminiStatus}
                         geminiLoading={geminiLoading}
                         geminiBusy={geminiBusy || geminiCorrelationBusy || geminiReportBusy}
-                        geminiResult={geminiResult}
+                        geminiResult={geminiResultsByIncident[selectedIncident.incident_id] ?? null}
                         geminiError={geminiError}
                         onInterpret={() => void interpretSelectedIncident()}
-                        onPrintReport={() => printReport("incident")}
                       />
                     )}
                   </Panel>
@@ -654,16 +660,18 @@ function App() {
           <span>{upload?.filename ?? "Sin archivo cargado"}</span>
         </footer>
       </main>
-      {selectedIncident && (
-        <PrintableIncidentReport
-          incident={selectedIncident}
+
+      {analysis && executiveReport && technicalReport && (
+        <PrintableFinalReport
+          analysis={analysis}
+          executiveReport={executiveReport}
+          technicalReport={technicalReport}
+          authorName={reportAuthorName.trim()}
+          includeTimeline={includeTimelineInReport}
           sourceFilename={upload?.filename ?? "Archivo no disponible"}
-          geminiResult={geminiResult?.incident_id === selectedIncident.incident_id ? geminiResult : null}
-          className={printTarget === "incident" ? "is-print-target" : ""}
+          className={printTarget === "final" ? "is-print-target" : ""}
         />
       )}
-      {executiveReport && <PrintableAnalysisReport report={executiveReport} sourceFilename={upload?.filename ?? "Archivo no disponible"} className={`print-report-executive ${printTarget === "executive" ? "is-print-target" : ""}`} />}
-      {technicalReport && <PrintableAnalysisReport report={technicalReport} sourceFilename={upload?.filename ?? "Archivo no disponible"} className={`print-report-technical ${printTarget === "technical" ? "is-print-target" : ""}`} />}
     </div>
   );
 }
@@ -718,77 +726,6 @@ function DashboardView({
         <MetricCard label="Incidentes" value={dashboard.incident_count} hint="Correlacionados con evidencia" />
         <MetricCard label="Hipótesis" value={analysis.hypotheses.length} hint="Vínculos no confirmados" />
       </div>
-
-      <Panel
-        title="Correlación IA de hallazgos"
-        action={
-          <button
-            className="button button-primary"
-            disabled={!geminiStatus?.enabled || geminiLoading || geminiRequestBusy}
-            onClick={onSuggestCorrelation}
-            type="button"
-          >
-            {geminiCorrelationBusy
-              ? "Correlacionando…"
-              : geminiCorrelation
-                ? "Consultar propuesta guardada"
-                : "Proponer correlación con Gemini"}
-          </button>
-        }
-      >
-        <p className="correlation-intro">
-          Una llamada analiza los {analysis.findings.length} hallazgos y los eventos vinculados a su evidencia. Esos datos se envían a Google; Gemini propone grupos, pero no modifica la correlación ni el riesgo deterministas. La respuesta se guarda en memoria para evitar llamadas repetidas.
-        </p>
-        {!geminiLoading && !geminiStatus?.enabled && (
-          <p className="muted-copy">Configura GEMINI_API_KEY en el backend para habilitar esta propuesta.</p>
-        )}
-        {geminiCorrelationError && <p className="gemini-error" role="alert">{geminiCorrelationError}</p>}
-        {geminiCorrelation && (
-          <div className="correlation-result" aria-live="polite">
-            <p className="gemini-cache-note">
-              {geminiCorrelation.cache_hit
-                ? "Propuesta recuperada de la caché; no se hizo otra llamada a Gemini."
-                : "Propuesta guardada en memoria para este análisis y modelo."}
-              {` Línea base: ${geminiCorrelation.baseline_incident_count} incidentes · Modelo ${geminiCorrelation.model} · ${geminiCorrelation.groups.filter((group) => group.type === "incidente").length} incidentes sugeridos · ${geminiCorrelation.groups.filter((group) => group.type === "aislado").length} hallazgos aislados.`}
-            </p>
-            <div className="correlation-groups">
-              {geminiCorrelation.groups.map((group) => (
-                <article className="correlation-group" key={group.group_id}>
-                  <div className="correlation-group-heading">
-                    <div>
-                      <span className={`correlation-kind ${group.type === "incidente" ? "is-incident" : "is-isolated"}`}>
-                        {group.type === "incidente" ? "Incidente sugerido" : "Hallazgo aislado"}
-                      </span>
-                      <h3>{group.group_id} · {group.title}</h3>
-                    </div>
-                    <span className="correlation-confidence">Confianza IA {group.confidence}/5</span>
-                  </div>
-                  <p>{group.justificacion}</p>
-                  <p className="correlation-baseline">
-                    <strong>Línea base:</strong> {group.baseline_incident_ids.length
-                      ? group.baseline_incident_ids.join(", ")
-                      : "Sin incidente determinista (hallazgo informativo)"}
-                  </p>
-                  <div className="correlation-finding-list">
-                    {group.finding_ids.map((findingId) => {
-                      const finding = analysis.findings.find((item) => item.finding_id === findingId);
-                      return (
-                        <span className="correlation-finding-tag" key={findingId}>
-                          <code>{findingId}</code>{finding ? ` · ${finding.rule_id} ${finding.name}` : ""}
-                        </span>
-                      );
-                    })}
-                  </div>
-                  <p className="correlation-evidence"><strong>Evidencia:</strong> {group.evidence_ids.map((id) => <code key={id}>{id}</code>)}</p>
-                </article>
-              ))}
-            </div>
-            <p className="correlation-disclaimer">
-              Propuesta asesorativa, no confirmación de un incidente. Los hallazgos aislados no se consideran incidentes nuevos.
-            </p>
-          </div>
-        )}
-      </Panel>
 
 
       <div className="content-grid dashboard-grid">
@@ -856,6 +793,77 @@ function DashboardView({
           </div>
         </Panel>
       )}
+
+      <Panel
+        title="Correlación IA de hallazgos"
+        action={(
+          <button
+            className="button button-primary"
+            disabled={!geminiStatus?.enabled || geminiLoading || geminiRequestBusy}
+            onClick={onSuggestCorrelation}
+            type="button"
+          >
+            {geminiCorrelationBusy
+              ? "Correlacionando…"
+              : geminiCorrelation
+                ? "Consultar propuesta guardada"
+                : "Proponer correlación con Gemini"}
+          </button>
+        )}
+      >
+        <p className="correlation-intro">
+          Una llamada analiza los {analysis.findings.length} hallazgos y los eventos vinculados a su evidencia. Esos datos se envían a Google; Gemini propone grupos, pero no modifica la correlación ni el riesgo deterministas. La respuesta se guarda en memoria para evitar llamadas repetidas.
+        </p>
+        {!geminiLoading && !geminiStatus?.enabled && (
+          <p className="muted-copy">Configura GEMINI_API_KEY en el backend para habilitar esta propuesta.</p>
+        )}
+        {geminiCorrelationError && <p className="gemini-error" role="alert">{geminiCorrelationError}</p>}
+        {geminiCorrelation && (
+          <div className="correlation-result" aria-live="polite">
+            <p className="gemini-cache-note">
+              {geminiCorrelation.cache_hit
+                ? "Propuesta recuperada de la caché; no se hizo otra llamada a Gemini."
+                : "Propuesta guardada en memoria para este análisis y modelo."}
+              {` Línea base: ${geminiCorrelation.baseline_incident_count} incidentes · Modelo ${geminiCorrelation.model} · ${geminiCorrelation.groups.filter((group) => group.type === "incidente").length} incidentes sugeridos · ${geminiCorrelation.groups.filter((group) => group.type === "aislado").length} hallazgos aislados.`}
+            </p>
+            <div className="correlation-groups">
+              {geminiCorrelation.groups.map((group) => (
+                <article className="correlation-group" key={group.group_id}>
+                  <div className="correlation-group-heading">
+                    <div>
+                      <span className={`correlation-kind ${group.type === "incidente" ? "is-incident" : "is-isolated"}`}>
+                        {group.type === "incidente" ? "Incidente sugerido" : "Hallazgo aislado"}
+                      </span>
+                      <h3>{group.group_id} · {group.title}</h3>
+                    </div>
+                    <span className="correlation-confidence">Confianza IA {group.confidence}/5</span>
+                  </div>
+                  <p>{group.justificacion}</p>
+                  <p className="correlation-baseline">
+                    <strong>Línea base:</strong> {group.baseline_incident_ids.length
+                      ? group.baseline_incident_ids.join(", ")
+                      : "Sin incidente determinista (hallazgo informativo)"}
+                  </p>
+                  <div className="correlation-finding-list">
+                    {group.finding_ids.map((findingId) => {
+                      const finding = analysis.findings.find((item) => item.finding_id === findingId);
+                      return (
+                        <span className="correlation-finding-tag" key={findingId}>
+                          <code>{findingId}</code>{finding ? ` · ${finding.rule_id} ${finding.name}` : ""}
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <p className="correlation-evidence"><strong>Evidencia:</strong> {group.evidence_ids.map((id) => <code key={id}>{id}</code>)}</p>
+                </article>
+              ))}
+            </div>
+            <p className="correlation-disclaimer">
+              Propuesta asesorativa, no confirmación de un incidente. Los hallazgos aislados no se consideran incidentes nuevos.
+            </p>
+          </div>
+        )}
+      </Panel>
     </div>
   );
 }
@@ -868,8 +876,12 @@ function ReportsView({
   geminiRequestBusy,
   geminiReportBusy,
   geminiReportError,
-  onGenerateReport,
-  onPrintReport,
+  reportAuthorName,
+  includeTimelineInReport,
+  onAuthorNameChange,
+  onTimelineOptionChange,
+  onGenerateFinalReport,
+  onPrintFinalReport,
 }: {
   analysis: AnalysisResult | null;
   executiveReport: GeminiExecutiveReport | null;
@@ -878,121 +890,66 @@ function ReportsView({
   geminiRequestBusy: boolean;
   geminiReportBusy: boolean;
   geminiReportError: string;
-  onGenerateReport: (type: "executive" | "technical") => void;
-  onPrintReport: (type: "executive" | "technical") => void;
+  reportAuthorName: string;
+  includeTimelineInReport: boolean;
+  onAuthorNameChange: (value: string) => void;
+  onTimelineOptionChange: (value: boolean) => void;
+  onGenerateFinalReport: () => void;
+  onPrintFinalReport: () => void;
 }) {
   if (!analysis) {
     return (
       <section className="empty-state">
         <div className="empty-icon" aria-hidden="true">▤</div>
-        <h2>Los informes estarán disponibles después del análisis</h2>
-        <p>Primero ejecuta el análisis determinista. Después podrás generar cada informe por separado.</p>
+        <h2>El informe estará disponible después del análisis</h2>
+        <p>Primero ejecuta el análisis determinista para preparar el informe completo.</p>
       </section>
     );
   }
 
+  const reportReady = Boolean(executiveReport && technicalReport);
+
   return (
     <div className="dashboard-stack">
       <div className="section-title-row">
-        <div><span className="section-kicker">ANÁLISIS ASISTIDO</span><h2>Informes</h2></div>
+        <div><span className="section-kicker">ANÁLISIS ASISTIDO</span><h2>Informe</h2></div>
       </div>
-      <p className="report-intro">Elige el informe que necesitas. Cada uno se genera bajo demanda y puede realizar una llamada a Gemini. Solo se envían los hallazgos y eventos relevantes; las propuestas no modifican la línea base determinista.</p>
-      {!geminiEnabled && <p className="muted-copy">Configura GEMINI_API_KEY en el backend para habilitar la generación de informes.</p>}
+      <p className="report-intro">La aplicación prepara un único informe con resumen ejecutivo, análisis técnico, hallazgos y evidencias. No se ofrecen informes ejecutivos, técnicos ni por incidente como archivos separados.</p>
+      {!geminiEnabled && <p className="muted-copy">Configura GEMINI_API_KEY en el backend para habilitar la generación asistida.</p>}
       {geminiReportError && <p className="gemini-error" role="alert">{geminiReportError}</p>}
       <Panel
-        title="Informe ejecutivo"
+        title="Informe completo (PDF)"
         action={(
-          <button className="button button-primary" disabled={!geminiEnabled || geminiRequestBusy} onClick={() => onGenerateReport("executive")} type="button">
-            {geminiReportBusy ? "Generando informe…" : executiveReport ? "Consultar informe guardado" : "Generar informe"}
+          <button className="button button-primary" disabled={!geminiEnabled || geminiRequestBusy} onClick={onGenerateFinalReport} type="button">
+            {geminiReportBusy ? "Generando informe completo…" : reportReady ? "Actualizar informe completo" : "Generar informe completo"}
           </button>
         )}
       >
-        {executiveReport ? <ExecutiveReportView report={executiveReport} onPrint={() => onPrintReport("executive")} /> : <p className="empty-copy">Aún no se ha generado el informe ejecutivo.</p>}
+        <p>{reportReady ? "El contenido del informe está preparado para imprimir." : "Genera el contenido asistido para habilitar el informe PDF."} Las solicitudes a Gemini solo se realizan al pulsar el botón y las propuestas no modifican el análisis determinista.</p>
+        <div className="report-cover-fields">
+          <label className="mapping-field">
+            Nombre de quien presenta
+            <input autoComplete="name" onChange={(event) => onAuthorNameChange(event.target.value)} placeholder="Nombre y apellidos" value={reportAuthorName} />
+          </label>
+        </div>
+        <label className="report-option">
+          <input
+            checked={includeTimelineInReport}
+            onChange={(event) => onTimelineOptionChange(event.target.checked)}
+            type="checkbox"
+          />
+          Incluir línea de tiempo de eventos correlacionados (opcional)
+        </label>
+        <p className="muted-copy">La fecha se añade al imprimir. La línea de tiempo está desactivada por defecto.</p>
+        <button
+          className="button button-secondary"
+          disabled={!reportReady || !reportAuthorName.trim()}
+          onClick={onPrintFinalReport}
+          type="button"
+        >
+          Imprimir / Guardar como PDF
+        </button>
       </Panel>
-      <Panel
-        title="Informe técnico"
-        action={(
-          <button className="button button-primary" disabled={!geminiEnabled || geminiRequestBusy} onClick={() => onGenerateReport("technical")} type="button">
-            {geminiReportBusy ? "Generando informe…" : technicalReport ? "Consultar informe guardado" : "Generar informe"}
-          </button>
-        )}
-      >
-        {technicalReport ? <TechnicalReportView report={technicalReport} analysis={analysis} onPrint={() => onPrintReport("technical")} /> : <p className="empty-copy">Aún no se ha generado el informe técnico.</p>}
-      </Panel>
-    </div>
-  );
-}
-
-function ExecutiveReportView({ report, onPrint }: { report: GeminiExecutiveReport; onPrint: () => void }) {
-  return (
-    <section className="ai-report-result" aria-label="Informe ejecutivo generado">
-      <div className="ai-report-heading">
-        <div><span className="detail-label">Informe ejecutivo · {report.model}</span><h3>Resumen para decisión</h3></div>
-        <button className="button button-secondary" onClick={onPrint} type="button">Imprimir / Guardar PDF</button>
-      </div>
-      <p className="gemini-cache-note">{report.cache_hit ? "Informe recuperado de memoria; no se hizo otra llamada." : "Informe guardado en memoria para este análisis y modelo."}</p>
-      <p>{report.summary}</p>
-      <h4>Puntos clave</h4>
-      {report.key_points.map((point) => (
-        <article className="ai-report-item" key={point.heading}>
-          <h4>{point.heading}</h4><p>{point.detail}</p>
-          <p className="report-citations"><strong>Hallazgos:</strong> {point.finding_ids.join(", ")} · <strong>Log_ID:</strong> {point.evidence_ids.join(", ")}</p>
-        </article>
-      ))}
-      <h4>Acciones recomendadas para analistas</h4>
-      {report.recommended_actions.length ? report.recommended_actions.map((item, index) => (
-        <article className="ai-report-item" key={`${index}-${item.action}`}>
-          <p><strong>{item.priority}:</strong> {item.action}</p>
-          <p className="report-citations"><strong>Hallazgos:</strong> {item.finding_ids.join(", ")} · <strong>Log_ID:</strong> {item.evidence_ids.join(", ")}</p>
-        </article>
-      )) : <p className="muted-copy">No se recomendaron acciones.</p>}
-      <BaselineSummary baseline={report.baseline} />
-      <p className="report-limitations"><strong>Limitaciones:</strong> {report.limitations}</p>
-      <p className="correlation-disclaimer">Contenido asesorativo, no confirmación de actividad maliciosa. Las recomendaciones son para revisión humana y no se ejecutan automáticamente.</p>
-    </section>
-  );
-}
-
-function TechnicalReportView({ report, analysis, onPrint }: { report: GeminiTechnicalReport; analysis: AnalysisResult; onPrint: () => void }) {
-  return (
-    <section className="ai-report-result" aria-label="Informe técnico generado">
-      <div className="ai-report-heading">
-        <div><span className="detail-label">Informe técnico · {report.model}</span><h3>Detalle por incidente</h3></div>
-        <button className="button button-secondary" onClick={onPrint} type="button">Imprimir / Guardar PDF</button>
-      </div>
-      <p className="gemini-cache-note">{report.cache_hit ? "Informe recuperado de memoria; no se hizo otra llamada." : "Informe guardado en memoria para este análisis y modelo."}</p>
-      <p>{report.summary}</p>
-      {report.incident_details.map((detail) => {
-        const incident = analysis.incidents.find((item) => item.incident_id === detail.incident_id);
-        return (
-          <article className="ai-report-item" key={detail.incident_id}>
-            <h4>{detail.incident_id} · {incident?.title ?? "Incidente"}</h4>
-            <p><strong>Línea base determinista:</strong> {incident ? `${incident.risk.level}, puntaje ${incident.risk.score}` : "No disponible"}</p>
-            <p>{detail.technical_summary}</p>
-            <p className="report-citations"><strong>Hallazgos:</strong> {detail.finding_ids.join(", ")} · <strong>Técnicas base:</strong> {detail.technique_ids.join(", ") || "ninguna"} · <strong>Log_ID:</strong> {detail.evidence_ids.join(", ")}</p>
-          </article>
-        );
-      })}
-      <h4>Hallazgos informativos (no son incidentes)</h4>
-      {report.informational_findings.length ? report.informational_findings.map((item) => (
-        <article className="ai-report-item" key={item.finding_id}>
-          <h4>{item.finding_id} · {analysis.findings.find((finding) => finding.finding_id === item.finding_id)?.name}</h4>
-          <p>{item.summary}</p><p className="report-citations"><strong>Log_ID:</strong> {item.evidence_ids.join(", ")}</p>
-        </article>
-      )) : <p className="muted-copy">No hay hallazgos informativos en este análisis.</p>}
-      <BaselineSummary baseline={report.baseline} />
-      <p className="report-limitations"><strong>Limitaciones:</strong> {report.limitations}</p>
-      <p className="correlation-disclaimer">Informe asesorativo. Los incidentes, técnicas y riesgos deterministas se conservan como línea base y no son modificados por Gemini.</p>
-    </section>
-  );
-}
-
-function BaselineSummary({ baseline }: { baseline: GeminiExecutiveReport["baseline"] }) {
-  return (
-    <div className="report-baseline">
-      <strong>Línea base determinista (no modificada por IA):</strong>
-      <span>{baseline.event_count} eventos · {baseline.finding_count} hallazgos · {baseline.incident_count} incidentes</span>
-      <span>{baseline.risk_by_incident.map((item) => `${item.incident_id}: ${item.level ?? "Sin nivel"} (${item.score ?? "—"})`).join(" · ") || "Sin riesgos por incidente"}</span>
     </div>
   );
 }
@@ -1084,7 +1041,6 @@ function IncidentDetail({
   geminiResult,
   geminiError,
   onInterpret,
-  onPrintReport,
 }: {
   incident: Incident;
   geminiStatus: GeminiStatus | null;
@@ -1093,7 +1049,6 @@ function IncidentDetail({
   geminiResult: GeminiInterpretation | null;
   geminiError: string;
   onInterpret: () => void;
-  onPrintReport: () => void;
 }) {
   const citedEvents = new Map(incident.events.map((event) => [event.Log_ID, event]));
   const citedLogIds = new Set(
@@ -1102,9 +1057,7 @@ function IncidentDetail({
   return (
     <div className="incident-detail">
       <div className="detail-title-row"><h3>{incident.title}</h3><RiskBadge level={incident.risk.level} /></div>
-      <div className="report-actions">
-        <button className="button button-secondary" onClick={onPrintReport} type="button">Imprimir / Guardar informe PDF</button>
-      </div>
+
       <div className="detail-score-grid">
         <span>Puntaje<strong>{incident.risk.score}</strong></span>
         <span>Impacto<strong>{incident.risk.impact}/5</strong></span>
@@ -1130,16 +1083,15 @@ function IncidentDetail({
           </span>
         </div>
         <p className="gemini-privacy">
-          La primera interpretación envía a Google los hallazgos y eventos de este incidente. Si ya está guardada,
-          consultarla de nuevo no genera otra llamada. La clave permanece en el backend; las reglas y el riesgo deterministas no cambian.
+          La interpretación se guarda para este incidente durante el análisis. Cambiar de incidente y volver conserva la respuesta sin otra petición a Gemini. La primera solicitud envía a Google los hallazgos y eventos de este incidente; las reglas y el riesgo deterministas no cambian.
         </p>
         <button
           className="button button-primary"
           type="button"
           onClick={onInterpret}
-          disabled={!geminiStatus?.enabled || geminiLoading || geminiBusy}
+          disabled={!geminiStatus?.enabled || geminiLoading || geminiBusy || Boolean(geminiResult)}
         >
-          {geminiBusy ? "Interpretando con Gemini…" : geminiResult ? "Consultar interpretación guardada" : "Interpretar con Gemini"}
+          {geminiBusy ? "Interpretando con Gemini…" : geminiResult ? "Interpretación guardada" : "Interpretar con Gemini"}
         </button>
         {!geminiLoading && !geminiStatus?.enabled && (
           <p className="muted-copy">Configura GEMINI_API_KEY en el entorno donde se inicia FastAPI para habilitar esta función.</p>
@@ -1256,194 +1208,163 @@ function IncidentDetail({
   );
 }
 
-function PrintableAnalysisReport({ report, sourceFilename, className }: {
-  report: GeminiAnalysisReport;
-  sourceFilename: string;
-  className: string;
-}) {
-  const generatedAt = new Date().toLocaleString("es-ES");
-  return (
-    <article className={`print-report print-analysis-report ${className}`}>
-      <header className="print-report-header">
-        <p className="print-eyebrow">SOC L2 · {report.report_type === "executive" ? "INFORME EJECUTIVO" : "INFORME TÉCNICO"} · ASISTIDO POR IA</p>
-        <h1>{report.report_type === "executive" ? "Resumen ejecutivo de seguridad" : "Informe técnico de análisis"}</h1>
-        <div className="print-report-meta"><span><strong>Generado:</strong> {generatedAt}</span><span><strong>Fuente:</strong> {sourceFilename}</span><span><strong>Modelo:</strong> {report.model}</span></div>
-      </header>
-      <section className="print-report-section">
-        <h2>Resumen</h2><p>{report.summary}</p>
-      </section>
-      <section className="print-report-section">
-        <h2>Línea base determinista</h2>
-        <p>{report.baseline.event_count} eventos · {report.baseline.finding_count} hallazgos · {report.baseline.incident_count} incidentes.</p>
-        {report.baseline.risk_by_incident.map((item) => <p key={item.incident_id}><strong>{item.incident_id}:</strong> {item.level ?? "Sin nivel"} · puntaje {item.score ?? "—"}</p>)}
-        <p className="print-disclaimer">Esta línea base procede del análisis local y Gemini no puede cambiar incidentes, hallazgos ni riesgo.</p>
-      </section>
-      {report.report_type === "executive" ? (
-        <>
-          <section className="print-report-section">
-            <h2>Puntos clave</h2>
-            {report.key_points.map((point) => <article className="print-finding" key={point.heading}><h3>{point.heading}</h3><p>{point.detail}</p><p><strong>Hallazgos:</strong> {point.finding_ids.join(", ")}</p><p><strong>Evidencia Log_ID:</strong> {point.evidence_ids.join(", ")}</p></article>)}
-          </section>
-          <section className="print-report-section">
-            <h2>Acciones recomendadas para analistas</h2>
-            {report.recommended_actions.length ? report.recommended_actions.map((item, index) => <article className="print-finding" key={`${index}-${item.action}`}><p><strong>{item.priority}:</strong> {item.action}</p><p><strong>Hallazgos:</strong> {item.finding_ids.join(", ")} · <strong>Log_ID:</strong> {item.evidence_ids.join(", ")}</p></article>) : <p>No se recomendaron acciones.</p>}
-          </section>
-        </>
-      ) : (
-        <>
-          <section className="print-report-section">
-            <h2>Detalle técnico por incidente</h2>
-            {report.incident_details.map((detail) => <article className="print-finding" key={detail.incident_id}><h3>{detail.incident_id}</h3><p>{detail.technical_summary}</p><p><strong>Hallazgos:</strong> {detail.finding_ids.join(", ")}</p><p><strong>Técnicas ATT&CK de la línea base:</strong> {detail.technique_ids.join(", ") || "ninguna"}</p><p><strong>Evidencia Log_ID:</strong> {detail.evidence_ids.join(", ")}</p></article>)}
-          </section>
-          <section className="print-report-section">
-            <h2>Hallazgos informativos · no son incidentes</h2>
-            {report.informational_findings.length ? report.informational_findings.map((item) => <article className="print-finding" key={item.finding_id}><h3>{item.finding_id}</h3><p>{item.summary}</p><p><strong>Evidencia Log_ID:</strong> {item.evidence_ids.join(", ")}</p></article>) : <p>No hay hallazgos informativos.</p>}
-          </section>
-        </>
-      )}
-      <section className="print-report-section"><h2>Limitaciones</h2><p>{report.limitations}</p></section>
-      <footer className="print-report-footer">Informe asesorativo generado con Gemini. Verifica las conclusiones y las citas antes de tomar medidas; no confirma por sí solo actividad maliciosa ni ejecuta recomendaciones.</footer>
-    </article>
-  );
-}
-
-function PrintableIncidentReport({
-  incident,
+function PrintableFinalReport({
+  analysis,
+  executiveReport,
+  technicalReport,
+  authorName,
+  includeTimeline,
   sourceFilename,
-  geminiResult,
   className,
 }: {
-  incident: Incident;
+  analysis: AnalysisResult;
+  executiveReport: GeminiExecutiveReport;
+  technicalReport: GeminiTechnicalReport;
+  authorName: string;
+  includeTimeline: boolean;
   sourceFilename: string;
-  geminiResult: GeminiInterpretation | null;
   className: string;
 }) {
-  const generatedAt = new Date().toLocaleString("es-ES");
-  const citedEvents = new Map(incident.events.map((event) => [event.Log_ID, event]));
+  const generatedAt = new Date().toLocaleDateString("es-ES");
+  const riskLevels = ["Crítico", "Alto", "Medio", "Bajo"];
+  const riskCounts = Object.fromEntries(riskLevels.map((level) => [
+    level,
+    analysis.incidents.filter((incident) => incident.risk.level === level).length,
+  ]));
+  const incidentFindingCount = new Set(analysis.incidents.flatMap((incident) => incident.finding_ids)).size;
+  const incidentFindings = analysis.findings.filter((finding) =>
+    analysis.incidents.some((incident) => incident.finding_ids.includes(finding.finding_id)),
+  );
+  const timelineById = new Map<string, { event: EventRecord; incidentIds: Set<string> }>();
+  analysis.incidents.forEach((incident) => incident.events.forEach((event) => {
+    const existing = timelineById.get(event.Log_ID);
+    if (existing) existing.incidentIds.add(incident.incident_id);
+    else timelineById.set(event.Log_ID, { event, incidentIds: new Set([incident.incident_id]) });
+  }));
+  const timeline = [...timelineById.values()].sort((left, right) => {
+    const leftTime = Date.parse(left.event.Timestamp);
+    const rightTime = Date.parse(right.event.Timestamp);
+    if (!Number.isFinite(leftTime)) return Number.isFinite(rightTime) ? 1 : 0;
+    if (!Number.isFinite(rightTime)) return -1;
+    return leftTime - rightTime;
+  });
+  const eventById = new Map(timeline.map(({ event }) => [event.Log_ID, event]));
+  const incidentDetailById = new Map(technicalReport.incident_details.map((detail) => [detail.incident_id, detail]));
 
   return (
-    <article className={`print-report print-report-incident ${className}`}>
-      <header className="print-report-header">
-        <p className="print-eyebrow">SOC L2 · INFORME DE INCIDENTE</p>
-        <h1>{incident.title}</h1>
-        <div className="print-report-meta">
-          <span><strong>Incidente:</strong> {incident.incident_id}</span>
-          <span><strong>Generado:</strong> {generatedAt}</span>
-          <span><strong>Fuente:</strong> {sourceFilename}</span>
-        </div>
+    <article className={`print-report print-final-report ${className}`}>
+      <header className="print-cover">
+        <p className="print-eyebrow">SOC L2 · INFORME TÉCNICO DE SEGURIDAD</p>
+        <h1>Informe de análisis de eventos e incidentes</h1>
+        <p><strong>Presentado por:</strong> {authorName}</p>
+        <p><strong>Fecha:</strong> {generatedAt}</p>
+        <p><strong>Archivo analizado:</strong> {sourceFilename}</p>
+
       </header>
 
       <section className="print-report-section">
-        <h2>Resumen y riesgo determinista</h2>
+        <h2>1. Resumen ejecutivo</h2>
+        <p>{executiveReport.summary}</p>
+        <p>El análisis local identificó {analysis.incident_count} {analysis.incident_count === 1 ? "incidente" : "incidentes"} y {analysis.finding_count} hallazgos en total: {incidentFindingCount} vinculados a incidentes y {analysis.informational_finding_count} informativos. Los informativos están incluidos en el total, no se suman aparte. La clasificación de riesgo es determinista; las interpretaciones y recomendaciones de Gemini son asesorativas.</p>
+      </section>
+
+      <section className="print-report-section">
+        <h2>2. Matriz de riesgo y resumen de hallazgos</h2>
         <div className="print-risk-grid">
-          <div><span>Criticidad</span><strong>{incident.risk.level}</strong></div>
-          <div><span>Puntaje</span><strong>{incident.risk.score}</strong></div>
-          <div><span>Impacto</span><strong>{incident.risk.impact}/5</strong></div>
-          <div><span>Confianza</span><strong>{incident.risk.confidence}/5</strong></div>
+          {riskLevels.map((level) => <div key={level}><span>{level}</span><strong>{riskCounts[level] ?? 0} incidentes</strong></div>)}
         </div>
-        <p><strong>Impacto:</strong> {incident.risk.impact_rationale}</p>
-        <p><strong>Confianza:</strong> {incident.risk.confidence_rationale}</p>
-        <p><strong>Reglas:</strong> {incident.rule_ids.join(", ") || "Sin reglas asociadas"}</p>
-        <p><strong>Técnicas ATT&CK:</strong> {incident.technique_ids.join(", ") || "Sin técnicas asociadas"}</p>
+        <p><strong>Incidentes identificados:</strong> {analysis.incident_count} ({analysis.incident_count ? "uno o varios incidentes" : "ningún incidente"}).</p>
+        <p><strong>Eventos analizados:</strong> {analysis.event_count} · <strong>Hallazgos totales:</strong> {analysis.finding_count} ({incidentFindingCount} vinculados a incidentes, {analysis.informational_finding_count} informativos).</p>
+        {analysis.incidents.map((incident) => (
+          <p key={incident.incident_id}><strong>{incident.incident_id} · {incident.title}:</strong> riesgo {incident.risk.level}, puntaje {incident.risk.score}/25. {incident.risk.impact_rationale} {incident.risk.confidence_rationale}</p>
+        ))}
+        <p className="print-disclaimer">Los niveles y puntajes se asignan al incidente mediante reglas locales. No representan una calificación de severidad individual de cada hallazgo.</p>
       </section>
 
       <section className="print-report-section">
-        <h2>Hallazgos</h2>
-        {incident.findings.length ? incident.findings.map((finding) => (
-          <article className="print-finding" key={finding.finding_id}>
-            <h3>{finding.rule_id} · {finding.name}</h3>
-            <p>{finding.explanation}</p>
-            <p className="print-muted">
-              Periodo: {displayTime(finding.first_seen)} – {displayTime(finding.last_seen)}
-              {finding.event_ids.length ? ` · ${finding.event_ids.length} registros vinculados` : ""}
-            </p>
-          </article>
-        )) : <p>No hay hallazgos asociados a este incidente.</p>}
-      </section>
-
-      <section className="print-report-section">
-        <h2>Entidades relacionadas</h2>
-        <p><strong>Usuarios:</strong> {incident.entities.users.join(", ") || "—"}</p>
-        <p><strong>Hosts:</strong> {incident.entities.hosts.join(", ") || "—"}</p>
-        <p><strong>IP de origen:</strong> {incident.entities.source_ips.join(", ") || "—"}</p>
-        <p><strong>Destinos:</strong> {incident.entities.destinations.join(", ") || "—"}</p>
-      </section>
-
-      <section className="print-report-section">
-        <h2>Interpretación asistida por IA</h2>
-        {geminiResult ? (
-          <>
-            <p><strong>Modelo:</strong> {geminiResult.model}</p>
-            <p><strong>Conclusión:</strong> {geminiResult.conclusion.replace("_", " ")}</p>
-            <p><strong>Línea base determinista:</strong> riesgo {incident.risk.level}, puntaje {incident.risk.score}. La clasificación IA siguiente es complementaria y no la modifica.</p>
-            <h3>Clasificación IA por hallazgo</h3>
-            {geminiResult.clasificaciones_hallazgos.length ? geminiResult.clasificaciones_hallazgos.map((classification) => {
-              const finding = incident.findings.find((item) => item.finding_id === classification.finding_id);
-              return (
-                <article className="print-finding" key={classification.finding_id}>
-                  <h3>{classification.finding_id}{finding ? ` · ${finding.name}` : ""} · Riesgo IA: {classification.riesgo}</h3>
-                  <p>{classification.justificacion}</p>
-                  <p><strong>Confianza IA:</strong> {classification.confianza}/5 · <strong>Técnicas MITRE:</strong> {classification.tecnica_mitre.join(", ") || "ninguna"}</p>
-                  <p className="print-muted">Evidencia: {classification.evidence_ids.map((id) => `${id}${citedEvents.get(id) ? ` · ${citedEvents.get(id)?.Event_Description}` : ""}`).join("; ")}</p>
-                </article>
-              );
-            }) : <p>Este incidente no contiene hallazgos para clasificar.</p>}
-            <h3>Análisis de IP de origen</h3>
-            {geminiResult.origenes.length ? geminiResult.origenes.map((origin) => (
-              <article className="print-origin" key={origin.ip}>
-                <p><strong>{origin.ip}</strong> — {origin.analisis}</p>
-                <p className="print-muted">Evidencia: {origin.evidence_ids.map((id) => `${id}${citedEvents.get(id) ? ` · ${citedEvents.get(id)?.Event_Description}` : ""}`).join("; ")}</p>
-              </article>
-            )) : <p>No se identificaron IP de origen pertinentes en los eventos.</p>}
-            <p className="print-muted">El análisis usa solo los registros del incidente; no consulta reputación, geolocalización ni titularidad de las IP.</p>
-            <h3>Comprobaciones sugeridas para el analista</h3>
-            {geminiResult.comprobaciones_recomendadas.length ? geminiResult.comprobaciones_recomendadas.map((item, index) => (
-              <article className="print-origin" key={`${index}-${item.comprobacion}`}>
-                <p>{item.comprobacion}</p>
-                <p className="print-muted">Evidencia: {item.evidence_ids.map((id) => `${id}${citedEvents.get(id) ? ` · ${citedEvents.get(id)?.Event_Description}` : ""}`).join("; ")}</p>
-              </article>
-            )) : <p>No se sugirieron comprobaciones adicionales.</p>}
-            <p className="print-muted">Son pasos de investigación para una persona; no se ejecutan automáticamente.</p>
-            <p><strong>Explicación:</strong> {geminiResult.explicacion}</p>
-            <p><strong>Limitación:</strong> {geminiResult.limitacion}</p>
-            <p><strong>Log_ID citados:</strong> {geminiResult.evidence_ids.length
-              ? geminiResult.evidence_ids.map((id) => `${id} — ${citedEvents.get(id)?.Event_Description ?? ""}`).join("; ")
-              : "No se citaron registros específicos."}</p>
-          </>
-        ) : (
-          <p>No se ejecutó Gemini para este incidente. El análisis determinista y su riesgo siguen disponibles.</p>
-        )}
-        <p className="print-disclaimer">
-          La conclusión de IA es una ayuda para priorizar la revisión y no confirma por sí sola actividad maliciosa.
-        </p>
-      </section>
-
-      <section className="print-report-section print-timeline">
-        <h2>Cronología completa · {incident.events.length} eventos</h2>
-        {incident.events.map((event) => {
-          const isAiCited = geminiResult?.evidence_ids.includes(event.Log_ID) ?? false;
+        <h2>3. Hallazgos identificados</h2>
+        {incidentFindings.length ? incidentFindings.map((finding) => {
+          const incident = analysis.incidents.find((item) => item.finding_ids.includes(finding.finding_id));
+          const reportDetail = incident ? incidentDetailById.get(incident.incident_id) : undefined;
+          const evidenceEvents = finding.event_ids.map((id) => eventById.get(id)).filter((event): event is EventRecord => Boolean(event));
           return (
-            <article className={`print-event ${isAiCited ? "print-event-ai-cited" : ""}`} key={event.Log_ID}>
-              <div className="print-event-meta">
-                <time>{displayTime(event.Timestamp)}</time>
-                <code>{event.Log_ID}</code>
-                {isAiCited && <strong className="print-cited-marker">Citado por Gemini</strong>}
-                <span>{event.Hostname || "Host no indicado"}</span>
-                <span>Event_ID {event.Event_ID}</span>
-              </div>
-              <p><strong>{event.Event_Description}</strong></p>
-              <p className="print-muted">
-                Usuario: {event.User || "—"} · Origen: {event.Source_IP || "—"} · Destino: {event.Destination || "—"} · Resultado: {event.Result}
-              </p>
-              {event.Process_CommandLine && <code className="print-command">{event.Process_CommandLine}</code>}
+            <article className="print-finding" key={finding.finding_id}>
+              <h3>{finding.finding_id} · {finding.name} ({finding.rule_id})</h3>
+              <p><strong>Explicación técnica:</strong> {finding.explanation}</p>
+              {reportDetail && <p><strong>Contexto técnico del incidente:</strong> {reportDetail.technical_summary}</p>}
+              <p><strong>Evidencias:</strong> {finding.event_ids.length ? finding.event_ids.join(", ") : "No hay Log_ID asociados"}</p>
+              {evidenceEvents.map((event) => (
+                <p className="print-evidence-row" key={event.Log_ID}><strong>{event.Log_ID}</strong> · {displayTime(event.Timestamp)} · {event.Hostname} · {event.Event_Description}{event.Process_CommandLine ? ` · Proceso: ${event.Process_CommandLine}` : ""}</p>
+              ))}
+              <p><strong>Criticidad:</strong> {incident ? `${incident.risk.level} (incidente ${incident.incident_id}; puntaje ${incident.risk.score})` : "Informativo; sin criticidad de incidente determinista"}</p>
+              {incident && <p><strong>Justificación del riesgo del incidente:</strong> {incident.risk.impact_rationale} {incident.risk.confidence_rationale}</p>}
+              <p><strong>Posible impacto organizacional (no confirmado):</strong> Si la actividad se valida, podría afectar la confidencialidad, integridad o disponibilidad de los sistemas o datos relacionados. Investigar el alcance antes de afirmar un impacto real.</p>
+              <p><strong>MITRE ATT&amp;CK:</strong> {finding.technique_ids.length ? finding.technique_ids.join(", ") : incident?.technique_ids.join(", ") || "No asociada por la línea base"}</p>
             </article>
           );
-        })}
+        }) : <p>No se identificaron hallazgos asociados a reglas.</p>}
+
+        <h3>Hallazgos informativos</h3>
+        {technicalReport.informational_findings.length ? technicalReport.informational_findings.map((item) => {
+          const finding = analysis.findings.find((entry) => entry.finding_id === item.finding_id);
+          return (
+            <article className="print-finding" key={item.finding_id}>
+              <h3>{item.finding_id}{finding ? ` · ${finding.name}` : ""} · Informativo</h3>
+              <p>{item.summary}</p>
+              {finding && <p><strong>Explicación técnica:</strong> {finding.explanation}</p>}
+              <p><strong>Criticidad:</strong> Informativo; no constituye un incidente de riesgo determinista.</p>
+              <p><strong>Evidencias Log_ID:</strong> {item.evidence_ids.join(", ") || finding?.event_ids.join(", ") || "No especificadas"}</p>
+              <p><strong>MITRE ATT&amp;CK:</strong> {finding?.technique_ids.join(", ") || "No asociada"}</p>
+            </article>
+          );
+        }) : <p>No hay hallazgos informativos adicionales descritos en el informe técnico.</p>}
       </section>
 
-      <footer className="print-report-footer">
-        Informe generado localmente a partir de los datos cargados. Verifica las conclusiones y la evidencia antes de tomar medidas.
-      </footer>
+      {includeTimeline && <section className="print-report-section">
+        <h2>4. Línea de tiempo de eventos correlacionados</h2>
+        <p>Se muestran eventos únicos vinculados a los incidentes, en orden cronológico. Total en análisis: {analysis.event_count}; eventos de incidente incluidos en esta cronología: {timeline.length}.</p>
+        {timeline.length ? timeline.map(({ event, incidentIds }) => (
+          <article className="print-event" key={event.Log_ID}>
+            <div className="print-event-meta"><time>{displayTime(event.Timestamp)}</time><strong>{event.Log_ID}</strong><span>{event.Hostname}</span><span>{[...incidentIds].join(", ")}</span></div>
+            <p>{event.Event_Description}</p>
+            {event.Process_CommandLine && <code className="print-command">{event.Process_CommandLine}</code>}
+          </article>
+        )) : <p>No hay eventos de incidente disponibles para la cronología.</p>}
+      </section>}
+
+      <section className="print-report-section">
+        <h2>{includeTimeline ? "5" : "4"}. Plan de acción</h2>
+        <h3>1. Investigar</h3>
+        <p>Validar los Log_ID y la secuencia temporal con las fuentes originales; confirmar usuario, host, proceso, resultado y contexto de negocio. Ampliar la búsqueda alrededor de los eventos relacionados y documentar los hallazgos sin asumir compromiso.</p>
+        <h3>2. Contener</h3>
+        <p>Si la investigación confirma actividad maliciosa y conforme al procedimiento autorizado de la organización, aplicar medidas proporcionales para limitar el alcance. Registrar aprobaciones, responsables, hora y efecto; evitar acciones disruptivas sin validación.</p>
+        <h3>3. Remediar</h3>
+        <p>Tras confirmar causa y alcance, eliminar persistencia o corregir la configuración afectada, rotar credenciales cuando corresponda, aplicar parches y verificar la recuperación y el monitoreo posterior.</p>
+        <p className="print-disclaimer">Este plan es una guía para revisión humana. No se ejecutó ninguna acción de investigación, contención o remediación.</p>
+      </section>
+
+      <section className="print-report-section">
+        <h2>{includeTimeline ? "6" : "5"}. Recomendaciones generales de seguridad</h2>
+        <ul>
+          <li>Mantener inventario de activos y fuentes de registro con sincronización horaria fiable y retención adecuada.</li>
+          <li>Revisar periódicamente reglas de detección, falsos positivos y cobertura de MITRE ATT&amp;CK según el entorno.</li>
+          <li>Aplicar mínimo privilegio, autenticación multifactor y gestión segura de credenciales.</li>
+          <li>Definir procedimientos de respuesta, responsables y vías de escalamiento, y probarlos regularmente.</li>
+          <li>Preservar evidencias y registrar toda decisión y acción de respuesta.</li>
+        </ul>
+        {executiveReport.recommended_actions.length > 0 && <>
+          <h3>Propuestas adicionales de Gemini (requieren validación)</h3>
+          {executiveReport.recommended_actions.map((item, index) => <p key={`${index}-${item.action}`}><strong>{item.priority}:</strong> {item.action} · Hallazgos: {item.finding_ids.join(", ") || "—"} · Log_ID: {item.evidence_ids.join(", ") || "—"}</p>)}
+        </>}
+      </section>
+
+      <section className="print-report-section">
+        <h2>Limitaciones</h2>
+        <p><strong>Informe ejecutivo:</strong> {executiveReport.limitations}</p>
+        <p><strong>Informe técnico:</strong> {technicalReport.limitations}</p>
+        <p>El contenido generado con Gemini es asesorativo y puede contener errores. Comprueba las conclusiones y las citas frente a los registros originales. El análisis no confirma por sí solo actividad maliciosa ni impacto organizacional.</p>
+      </section>
+      <footer className="print-report-footer">Fuente: {sourceFilename}. Riesgos e incidentes provienen de la línea base local y no son modificados por Gemini.</footer>
     </article>
   );
 }

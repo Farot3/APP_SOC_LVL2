@@ -266,6 +266,10 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .report-citations { color: var(--muted); font-size: 10px !important; overflow-wrap: anywhere; }
 .report-baseline { margin-top: 12px; padding: 10px 12px; display: grid; gap: 4px; border-left: 3px solid var(--accent); background: #f1f7f5; font-size: 11px; }
 .report-limitations { padding: 9px 11px; border: 1px solid #eadbb8; border-radius: 7px; background: #fffbf1; font-size: 11px; line-height: 1.55; }
+.report-cover-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-bottom: 12px; }
+.report-cover-fields input { min-width: 0; min-height: 36px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); font-size: 12px; }
+.report-option { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0; color: var(--ink); font-size: 12px; }
+.report-option input { margin: 2px 0 0; accent-color: var(--accent); }
 .print-report { display: none; }
 
 @media (max-width: 900px) {
@@ -287,6 +291,10 @@ button:disabled { cursor: not-allowed; opacity: .5; }
   .print-report { display: none !important; width: 100%; color: #17212b; font: 10pt/1.45 "Segoe UI", sans-serif; }
   .print-report.is-print-target { display: block !important; }
   .print-report-header { padding-bottom: 12px; border-bottom: 2px solid #147d78; }
+  .print-cover { min-height: 245mm; display: flex; flex-direction: column; justify-content: center; break-after: page; page-break-after: always; }
+  .print-cover h1 { max-width: 155mm; margin: 8px 0 24px; color: #122a37; font-size: 28pt; line-height: 1.15; }
+  .print-cover p { margin: 7px 0; overflow-wrap: anywhere; }
+
   .print-eyebrow { margin: 0 0 5px; color: #0e625e; font-size: 9pt; font-weight: 700; letter-spacing: .1em; }
   .print-report-header h1 { margin: 0 0 10px; font-size: 19pt; }
   .print-report-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px; color: #47565f; font-size: 9pt; }
@@ -300,6 +308,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
   .print-risk-grid strong { font-size: 11pt; }
   .print-finding { margin: 8px 0; padding: 2px 0 2px 9px; border-left: 2px solid #147d78; break-inside: avoid; }
   .print-finding h3 { margin: 0; font-size: 10pt; }
+  .print-evidence-row { margin: 4px 0 4px 10px !important; padding-left: 7px; border-left: 1px solid #d5dde1; font-size: 9pt; overflow-wrap: anywhere; }
   .print-origin { margin: 7px 0; break-inside: avoid; }
   .print-origin p { margin: 4px 0; }
   .print-report-section h3 { margin: 10px 0 5px; font-size: 10pt; }
@@ -314,6 +323,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 }
 
 @media (max-width: 560px) {
+
   .topbar { height: 70px; padding: 0 15px; }
   .mapping-panel-heading { align-items: flex-start; flex-direction: column; }
   .mapping-grid { grid-template-columns: 1fr; }
